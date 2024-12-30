@@ -14,16 +14,12 @@ import numpy as np
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from datasets.datautils3d import load_with_coord , load_diffusion_coords_idensity , load_diffusion_random_blocks , load_diffusion_overlap_blocks , load_diffusion_unconditional
-from datasets.slicedataset import load_slice_dataset
+from datasets.datautils3d import  load_diffusion_unconditional
 #from huggingface_hub import create_repo, upload_folder
 from packaging import version
 #from torchvision import transforms
 from tqdm.auto import tqdm
 from omegaconf import OmegaConf
-
-from model.network import PCC_Net
-from model.SongUnet import Slice_UNet
 from model.Song3DUnet import SongUNet3D
 import diffusers
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
@@ -113,7 +109,7 @@ def main():
         def load_model_hook(models, input_dir):
             if cfg.use_ema:
                 load_model = EMAModel.from_pretrained(
-                    os.path.join(input_dir, "unet_ema"), Slice_UNet)
+                    os.path.join(input_dir, "unet_ema"), SongUNet3D)
                 ema_model.load_state_dict(load_model.state_dict())
                 ema_model.to(accelerator.device)
                 del load_model
@@ -123,7 +119,7 @@ def main():
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = Slice_UNet.from_pretrained(
+                load_model = SongUNet3D.from_pretrained(
                     input_dir, subfolder="unet")
                 model.register_to_config(**load_model.config)
 
@@ -190,7 +186,7 @@ def main():
             use_ema_warmup=True,
             inv_gamma=cfg.ema_inv_gamma,
             power=cfg.ema_power,
-            model_cls=Slice_UNet,
+            model_cls=SongUNet3D,
             model_config=model.config,
         )
 

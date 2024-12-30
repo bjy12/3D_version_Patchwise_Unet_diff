@@ -66,7 +66,7 @@ class BaseTrainingConfig:
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/images'
+    image_root: str = '/root/share/processed_128x128_s2/images'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
     files_list_path: str = './files_list/p_train_demo.txt'
 
