@@ -372,8 +372,7 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
             decoder_type = decoder_type,
             resample_filter = resample_filter,
             implicit_mlp = implicit_mlp
-        )
-            
+        )      
     def forward(self , x , time_step , class_labels=None):
         pred = self.model(x , time_step , class_labels=class_labels)
         return pred
@@ -426,6 +425,7 @@ class Slice_UNet(ModelMixin, ConfigMixin):
             resample_filter = resample_filter,
             implicit_mlp = implicit_mlp)
     def forward(self , x , time_step , class_labels=None):
+
         pred = self.model(x , time_step , class_labels=class_labels)
         return pred
 
@@ -554,7 +554,7 @@ class SongUNet3D(torch.nn.Module):
         aux = x
         #pdb.set_trace()
         for name, block in self.enc.items():
-            print(" name :" , name)
+            #print(" name :" , name)
             if 'aux_down' in name:
                 aux = block(aux)
             elif 'aux_skip' in name:
@@ -563,16 +563,16 @@ class SongUNet3D(torch.nn.Module):
                 x = skips[-1] = aux = (x + block(aux)) / np.sqrt(2)
             else:
                 #pdb.set_trace()
-                print( 'input blocks before : ' , x.shape)
+                #print( 'input blocks before : ' , x.shape)
                 x = block(x, emb) if isinstance(block, UNetBlock3D) else block(x)
-                print( 'input blocks after : ' ,  x.shape)
+                #print( 'input blocks after : ' ,  x.shape)
                 skips.append(x)
         #pdb.set_trace()
         # Decoder.
         aux = None
         tmp = None
         for name, block in self.dec.items():
-            print(" name  " , name)
+            #print(" name  " , name)
             if 'aux_up' in name:
                 aux = block(aux)
             elif 'aux_norm' in name:
@@ -584,7 +584,7 @@ class SongUNet3D(torch.nn.Module):
                 if x.shape[1] != block.in_channels:
                     x = torch.cat([x, skips.pop()], dim=1)
                 x = block(x, emb)
-        print("last output " , x.shape)
+        #print("last output " , x.shape)
         #pdb.set_trace()
         return aux
 

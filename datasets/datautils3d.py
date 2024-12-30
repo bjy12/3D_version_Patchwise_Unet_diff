@@ -322,7 +322,27 @@ class Self_LearningWithCoordsData(Dataset):
         return output , image_gt
 
 
+class Diffusion_Unconditional_Dataset(Dataset):
+    def __init__(self, root_data):
+        super().__init__()
+        self.root_data = root_data
+        self.image_files_path = []
+        for file in os.listdir(self.root_data):
+            self.image_files_path.append(os.path.join(self.root_data , file))
+    def __len__(self):
+        return len(self.image_files_path)
+    def __getitem__(self, index):
+        image_path = self.image_files_path[index]
+        #pdb.set_trace()
+        image_ , _ =  sitk_load(image_path , uint8=True)
 
+        image_ = ( image_ * 2 ) - 1
+
+        image_ = image_[np.newaxis, : ]
+        
+        return  image_ 
+
+        return super().__getitem__(index)    
 
 
 
@@ -361,6 +381,15 @@ def load_diffusion_overlap_blocks(root_data , file_list_path):
     return  dataset
     
 
+def load_diffusion_unconditional(root_data):
+    dataset = Diffusion_Unconditional_Dataset(root_data)
+    #pdb.set_trace()
+    #dataset[0]
+
+    return dataset
+
+
+
 
 if __name__ == '__main__':
     #coords_root_path = '/root/share/pcc_gan_demo/pcc_gan_demo_centriod/train/coords'
@@ -376,6 +405,9 @@ if __name__ == '__main__':
     # file_list_path = './files_list/p_train_demo.txt'
     # load_diffusion_random_blocks(root_path, file_list_path)
 
-    root_path = '/root/share/pcc_gan_demo/cnetrilize_overlap_blocks_64'
-    file_list_path = './files_list/p_train_demo.txt'
-    load_diffusion_overlap_blocks(root_path, file_list_path)
+    # root_path = '/root/share/pcc_gan_demo/cnetrilize_overlap_blocks_64'
+    # file_list_path = './files_list/p_train_demo.txt'
+    # load_diffusion_overlap_blocks(root_path, file_list_path)
+
+    root_path = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/images'
+    load_diffusion_unconditional(root_path)

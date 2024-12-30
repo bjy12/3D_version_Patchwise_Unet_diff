@@ -44,8 +44,11 @@ class BaseTrainingConfig:
         'channel_mult_noise': 1,
         'resample_filter':[1,1],
         'model_channels': 128, 
-        'channel_mult':[2,2,2],
-        'img_resolution':256,
+        'channel_mult':[1,2,2],
+        'channel_mult_emb': 2,
+        'num_blocks': 2,
+        'attn_resolutions': [16],
+        'img_resolution':128,
         'in_channels': 4, 
         'out_channels': 1, # 1 + 3 
     })
@@ -63,7 +66,7 @@ class BaseTrainingConfig:
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = '/root/share/slice_aixs_dataset'
+    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/images'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
     files_list_path: str = './files_list/p_train_demo.txt'
 
