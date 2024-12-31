@@ -490,7 +490,7 @@ def main():
                     if cfg.use_ema:
                         ema_model.store(net.parameters())
                         ema_model.copy_to(net.parameters())
-                    
+                    pdb.set_trace()
                     pipeline = CustomDDPMPipeline(
                         net=net,
                         scheduler=noise_scheduler,

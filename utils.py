@@ -2,6 +2,7 @@ import os
 import torch
 import numpy as np
 import SimpleITK as sitk
+import pdb
 from tqdm import tqdm
 
 
@@ -93,3 +94,12 @@ def make_coord(shape, ranges=None, flatten=True):
     return ret
 
 
+def save_pred_to_local(images ,save_path , global_steps=0 ):
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    # image size is (batch_size, 1 , h , d ,w )
+    pdb.set_trace()
+    for i in range(images.shape[0]):
+        image = images[i, 0, :, :, :]
+        save_image_path = os.path.join(save_path, str(global_steps) + '_' + str(i) + '.nii.gz')
+        sitk_save(save_image_path , image , uint8=True)

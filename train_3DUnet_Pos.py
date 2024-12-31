@@ -24,7 +24,7 @@ from model.Song3DUnet import SongUNet3D
 import diffusers
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 
-from ddpm_process import CustomDDPMPipeline
+from patch_wise_generation import PosBaseDDPMPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
@@ -33,6 +33,7 @@ from diffusers.utils.import_utils import is_xformers_available
 #from ddpm_process import save_pred_from_noise
 from pachify import pachify3D
 from training_cfg_pcc import BaseTrainingConfig
+from utils import save_pred_to_local
 import pdb
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -509,52 +510,56 @@ def main():
             if accelerator.is_main_process:
                 if epoch % cfg.valid_epochs == 0 or epoch == cfg.num_epochs - 1:
                     net = accelerator.unwrap_model(model)
-
+                    pdb.set_trace()
+                    device = accelerator.device                    
                     if cfg.use_ema:
                         ema_model.store(net.parameters())
                         ema_model.copy_to(net.parameters())
-                    
-                    pipeline = CustomDDPMPipeline(
+                    pdb.set_trace()
+                    pipeline = PosBaseDDPMPipeline(
                         net=net,
                         scheduler=noise_scheduler,
                     )
-
+                    pipeline.set_device(device)
                     generator = torch.Generator(
-                        device=pipeline.device).manual_seed(0)
+                        device=device).manual_seed(0)
                     # run pipeline in inference (sample random noise and denoise)
-                    images = pipeline(
+                    sample_pred = pipeline(
+                        sample_type="patch",
                         generator=generator,
                         batch_size=cfg.valid_batch_size,
                         num_inference_steps=cfg.ddpm_num_inference_steps,
-                        output_type="np",
+                        img_resolution= cfg.img_resolution,
+                        patch_size = cfg.patch_size,
+                        start_pos = cfg.start_pos
+
                     )
-                    save_pred_from_noise(images=images , save_path = vis_dir)
+                    image_pred = sample_pred['image']
+                    save_pred_to_local(images=image_pred , save_path = vis_dir,global_steps = global_step)
                     if cfg.use_ema:
                         ema_model.restore(net.parameters())
 
                     # denormalize the images and save to tensorboard
-                    #images_processed = (images * 255).round().astype("uint8")
 
-                    # if cfg.logger == "tensorboard":
-                    #     if is_accelerate_version(">=", "0.17.0.dev0"):
-                    #         tracker = accelerator.get_tracker(
-                    #             "tensorboard", unwrap=True)
-                    #     else:
-                    #         tracker = accelerator.get_tracker("tensorboard")
-                    #     tracker.add_images(
-                    #         "test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
-                    # elif cfg.logger == "wandb":
-                    #     # Upcoming `log_images` helper coming in https://github.com/huggingface/accelerate/pull/962/files
-                    #     accelerator.get_tracker("wandb").log(
-                    #         {"test_samples": [wandb.Image(
-                    #             img) for img in images_processed], "epoch": epoch},
-                    #         step=global_step,
-                    #     )
+                    if cfg.logger == "tensorboard":
+                        if is_accelerate_version(">=", "0.17.0.dev0"):
+                            tracker = accelerator.get_tracker(
+                                "tensorboard", unwrap=True)
+                        else:
+                            tracker = accelerator.get_tracker("tensorboard")
+                        middle_slice = image_pred.shape[2] // 2
+                        images_2d = image_pred[:, :, middle_slice, :, :]  # [B, 1, H, W]
+                        
+                        # 归一化到[0, 255]范围
+                        images_processed = (images_2d * 255).round().astype("uint8")
+                        tracker.add_images(
+                            "sample_middle_slice", images_processed , epoch)
+
 
                 if epoch % cfg.save_model_epochs == 0 or epoch == cfg.num_epochs - 1:
                     # save the model
                     unet = accelerator.unwrap_model(model)
-
+                    pdb.set_trace()
                     if cfg.use_ema:
                         ema_model.store(unet.parameters())
                         ema_model.copy_to(unet.parameters())
@@ -578,6 +583,11 @@ def main():
                     #     )
 
     accelerator.end_training()
+
+
+
+        
+
 
 
 if __name__ == "__main__":

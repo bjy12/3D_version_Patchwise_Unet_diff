@@ -12,10 +12,14 @@ class BaseTrainingConfig:
     logger: str = 'tensorboard'
     checkpointing_steps: int = 500
     checkpoints_total_limit: int = 20
-    valid_epochs: int = 100
+    # vis val
+    valid_epochs: int = 1
     valid_batch_size: int = 1
     save_model_epochs: int = 100
     resume_from_checkpoint: str = None
+    img_resolution: int = 128 
+    patch_size: int = 32
+    start_pos: int = 64
 
     # Diffuion Models
     model_config: str = None
@@ -62,11 +66,11 @@ class BaseTrainingConfig:
     mixed_precision: str = None
     enable_xformers_memory_efficient_attention: bool = True
     gradient_checkpointing: bool = False
-    eval_vis: bool = False
+    eval_vis: bool = True
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = '/root/share/processed_128x128_s2/images'
+    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/images'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
     files_list_path: str = './files_list/p_train_demo.txt'
 
