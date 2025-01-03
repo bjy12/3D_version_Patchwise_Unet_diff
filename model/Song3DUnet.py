@@ -1,9 +1,24 @@
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.functional as F
 from torch.nn.functional import silu
+from model.image_encoder.u_net import UNet
+from model.implict_function import get_embedder ,DummyNeRF
 import pdb
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers import ModelMixin
+
+
+def index_2d(feat, uv):
+    # https://zhuanlan.zhihu.com/p/137271718
+    # feat: [B, C, H, W]
+    # uv: [B, N, 2]
+    uv = uv.unsqueeze(2) # [B, N, 1, 2]
+    feat = feat.transpose(2, 3) # [W, H]
+    samples = torch.nn.functional.grid_sample(feat, uv, align_corners=True) # [B, C, N, 1]
+    return samples[:, :, :, 0] # [B, C, N]
+
 
 def weight_init(shape, mode, fan_in, fan_out):
     if mode == 'xavier_uniform': return np.sqrt(6 / (fan_in + fan_out)) * (torch.rand(*shape) * 2 - 1)
@@ -328,6 +343,24 @@ class FourierEmbedding(torch.nn.Module):
         x = torch.cat([x.cos(), x.sin()], dim=1)
         return x
 
+
+class MLP(nn.Module):
+    def __init__(self, mlp_list, use_bn=False):
+        super().__init__()
+
+        layers = []
+        for i in range(len(mlp_list) - 1):
+            layers += [nn.Conv2d(mlp_list[i], mlp_list[i + 1], kernel_size=1)]
+            if use_bn:
+                layers += [nn.BatchNorm2d(mlp_list[i + 1])]
+            layers += [nn.LeakyReLU(inplace=True),]
+        
+        self.layer = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.layer(x)
+
+
 class Song_Unet3D(ModelMixin , ConfigMixin):
     @register_to_config
     def __init__(self,
@@ -351,9 +384,17 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
         resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
         implicit_mlp        = False,        # enable implicit coordinate encoding
-        mode_type           = '2d'
+        image_encoder       = {}
     ):
         super(Song_Unet3D , self).__init__()
+
+        self.image_feature_extractor = UNet(n_channels=1 , n_classes=64 , bilinear=False)
+        self.combine = 'mlp'
+        self.view_mixer = MLP([2, 2 // 2, 1])
+
+        self.pos_implic , _  = get_embedder(multires=10 , i=0)
+
+        self.implict_fn = DummyNeRF(input_ch=127 , output_ch=128)
         self.model = SongUNet3D(
             img_resolution = img_resolution,
             in_channels = in_channels,
@@ -373,61 +414,82 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
             resample_filter = resample_filter,
             implicit_mlp = implicit_mlp
         )      
-    def forward(self , x , time_step , class_labels=None):
-        pred = self.model(x , time_step , class_labels=class_labels)
-        return pred
 
 
-class Slice_UNet(ModelMixin, ConfigMixin):
-    @register_to_config
-    def __init__(self ,
-        img_resolution,                     # Image resolution at input/output.
-        in_channels,                        # Number of color channels at input.
-        out_channels,                       # Number of color channels at output.
-        label_dim           = 0,            # Number of class labels, 0 = unconditional.
-        augment_dim         = 0,            # Augmentation label dimensionality, 0 = no augmentation.
+    def condition_process(self, projs , projs_points , coords_global):
+        #pdb.set_trace()
+        b , m , c , w , h = projs.shape
+        projs = projs.reshape(b * m, c, w, h) # B', C, W, H
+        _ , _ , v_w , v_h ,v_d = coords_global.shape
+        coords_global = coords_global.reshape(b,3,-1)
 
-        model_channels      = 128,          # Base multiplier for the number of channels.
-        channel_mult        = [1,2,2,2],    # Per-resolution multipliers for the number of channels.
-        channel_mult_emb    = 4,            # Multiplier for the dimensionality of the embedding vector.
-        num_blocks          = 4,            # Number of residual blocks per resolution.
-        attn_resolutions    = [16],         # List of resolutions with self-attention.
-        dropout             = 0.10,         # Dropout probability of intermediate activations.
-        label_dropout       = 0,            # Dropout probability of class labels for classifier-free guidance.
-
-        embedding_type      = 'positional', # Timestep embedding type: 'positional' for DDPM++, 'fourier' for NCSN++.
-        channel_mult_noise  = 1,            # Timestep embedding size: 1 for DDPM++, 2 for NCSN++.
-        encoder_type        = 'standard',   # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
-        decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
-        resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
-        implicit_mlp        = False,        # enable implicit coordinate encoding
-        mode_type           = '2d'
-    ):  
-        super(Slice_UNet, self).__init__()
+        proj_feats = self.image_feature_extractor(projs)
+        proj_feats = list(proj_feats) if type(proj_feats) is tuple else [proj_feats]
+        for i in range(len(proj_feats)):
+            _, c_, w_, h_ = proj_feats[i].shape
+            proj_feats[i] = proj_feats[i].reshape(b, m, c_, w_, h_) # B, M, C, W, H
         
         #pdb.set_trace()
-        self.model = SongUNet(
-            img_resolution = img_resolution,
-            in_channels = in_channels,
-            out_channels = out_channels,
-            label_dim = label_dim,
-            model_channels = model_channels,
-            channel_mult = channel_mult,
-            channel_mult_emb = channel_mult_emb,
-            num_blocks = num_blocks,
-            attn_resolutions = attn_resolutions,
-            dropout = dropout,
-            label_dropout = label_dropout,
-            embedding_type = embedding_type,
-            channel_mult_noise = channel_mult_noise,
-            encoder_type = encoder_type,
-            decoder_type = decoder_type,
-            resample_filter = resample_filter,
-            implicit_mlp = implicit_mlp)
-    def forward(self , x , time_step , class_labels=None):
 
-        pred = self.model(x , time_step , class_labels=class_labels)
+        points_feats = self.forward_points(proj_feats , projs_points)
+        #pdb.set_trace()
+        coords_global = coords_global.permute(0,2,1)
+        pos_embed = self.pos_implic(coords_global)
+        #pdb.set_trace()
+        points_feats = points_feats.permute(0,2,1)
+        p_condition = self.implict_fn(pos_embed , points_feats)
+        p_condition = p_condition.permute(0,2,1)
+        #pdb.set_trace()
+        p_condition = p_condition.reshape(b, -1, v_w, v_h ,v_d)
+
+        return p_condition
+
+
+
+
+
+
+    def forward_points(self, proj_feats , projs_points):
+        n_view = proj_feats[0].shape[1]
+        # 1. query view-specific features
+        p_list = []
+        #pdb.set_trace()
+        for i in range(n_view):
+            f_list = []
+            for proj_f in proj_feats:
+                #pdb.set_trace()
+                feat = proj_f[:, i, ...] # B, C, W, H
+                p = projs_points[:, i, ...] # B, N, 2
+                #pdb.set_trace()
+                p_feats = index_2d(feat, p) # B, C, N
+                f_list.append(p_feats)
+            p_feats = torch.cat(f_list, dim=1)
+            p_list.append(p_feats)
+        p_feats = torch.stack(p_list, dim=-1) # B, C, N, M
+        #pdb.set_trace()
+         # 2. cross-view fusion
+        if self.combine == 'max':
+            p_feats = F.max_pool2d(p_feats, (1, n_view))
+            p_feats = p_feats.squeeze(-1) # B, C, N
+            condition_feats = p_feats  # 保存用于condition的特征
+        elif self.combine == 'mlp':
+            #pdb.set_trace()
+            p_feats = p_feats.permute(0, 3, 1, 2)
+            condition_feats = self.view_mixer(p_feats)  # 保存MLP输出的特征
+            p_feats = condition_feats.squeeze(1)
+
+        return p_feats
+
+    def forward(self , x , time_step , projs , projs_points , class_labels=None):
+        #pdb.set_trace()
+        b , c , h , w ,d = x.shape
+        coords_global = x[:,1:4,...]
+        points_implict = self.condition_process(projs , projs_points , coords_global)
+        #pdb.set_trace()
+        pred = self.model(x , time_step , points_implict ,class_labels=class_labels)
         return pred
+
+
 
 class SongUNet3D(torch.nn.Module):
     def __init__(self,
@@ -471,12 +533,44 @@ class SongUNet3D(torch.nn.Module):
         self.map_noise = PositionalEmbedding(num_channels=noise_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=noise_channels)
         self.map_label = Linear(in_features=label_dim, out_features=noise_channels, **init) if label_dim else None
         self.map_augment = Linear(in_features=augment_dim, out_features=noise_channels, bias=False, **init) if augment_dim else None
+         
         self.map_layer0 = Linear(in_features=noise_channels, out_features=emb_channels, **init)
         self.map_layer1 = Linear(in_features=emb_channels, out_features=emb_channels, **init)
+
+        # 添加condition处理层
+        self.implict_dim = 192
+        self.condition_processor = nn.Sequential(
+            Conv3d(in_channels=self.implict_dim, out_channels=self.implict_dim//2, kernel=1, **init),
+            nn.SiLU(),
+            Conv3d(in_channels=self.implict_dim//2, out_channels=60, kernel=1, **init),
+            nn.SiLU()
+        )
+
+
+
+        #! to do 
+        # New: Condition processing layers for different scales
+        # self.condition_blocks = torch.nn.ModuleDict()
+        # pdb.set_trace()
+        # curr_channels = model_channels
+        # for level, mult in enumerate(channel_mult):
+        #     out_channels = model_channels * mult
+        #     if level > 0:  # Skip the first level as it matches input condition
+        #         self.condition_blocks[f'level_{level}'] = Conv3d(
+        #             in_channels=curr_channels,
+        #             out_channels=out_channels,
+        #             kernel=3,
+        #             down=True,
+        #             resample_filter=resample_filter,
+        #             **init
+        #         )
+        #     curr_channels = out_channels
+
+        # Modified mapping layers to include condition
     
         self.enc = torch.nn.ModuleDict()
         self.dec = torch.nn.ModuleDict()
-
+       
         cout = in_channels
         caux = in_channels
         for level, mult in enumerate(channel_mult):
@@ -484,7 +578,7 @@ class SongUNet3D(torch.nn.Module):
             print(" level : " , level)
             print(' multi :' , mult)
             if level == 0:
-                cin = cout
+                cin = cout + 60
                 cout = model_channels
                 if implicit_mlp:
                     self.enc[f'{res}x{res}x{res}_conv'] = torch.nn.Sequential(
@@ -512,6 +606,7 @@ class SongUNet3D(torch.nn.Module):
                 cout = model_channels * mult
                 attn = (res in attn_resolutions)
                 self.enc[f'{res}x{res}x{res}_block{idx}'] = UNetBlock3D(in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
+       
         skips = [block.out_channels for name, block in self.enc.items() if 'aux' not in name]
 
         # Decoder.
@@ -532,9 +627,21 @@ class SongUNet3D(torch.nn.Module):
                 if decoder_type == 'skip' and level < len(channel_mult) - 1:
                     self.dec[f'{res}x{res}x{res}_aux_up'] = Conv3d(in_channels=out_channels, out_channels=out_channels, kernel=0, up=True, resample_filter=resample_filter)
                 self.dec[f'{res}x{res}x{res}_aux_norm'] = GroupNorm(num_channels=cout, eps=1e-6)
-                self.dec[f'{res}x{res}x{res}_aux_conv'] = Conv3d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)       
+                self.dec[f'{res}x{res}x{res}_aux_conv'] = Conv3d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)      
 
-    def forward(self, x, noise_labels, class_labels=None, augment_labels=None):
+    # def process_condition(self, condition):
+    #     """Generate multi-scale conditions"""
+    #     conditions = {}
+    #     curr_condition = condition
+    #     conditions['level_0'] = curr_condition
+    #     pdb.set_trace()
+    #     for level in range(1, len(self.condition_blocks) + 1):
+    #         curr_condition = self.condition_blocks[f'level_{level}'](curr_condition)
+    #         conditions[f'level_{level}'] = curr_condition
+
+    #     return conditions   
+
+    def forward(self, x, noise_labels, condition , class_labels=None, augment_labels=None):
 
         # Mapping.
         #pdb.set_trace()
@@ -548,7 +655,14 @@ class SongUNet3D(torch.nn.Module):
         if self.map_augment is not None and augment_labels is not None:
             emb = emb + self.map_augment(augment_labels)
         emb = silu(self.map_layer0(emb)) # 1 256 
-        emb = silu(self.map_layer1(emb)) # 1 512   # t embedding                                                
+        emb = silu(self.map_layer1(emb)) # 1 512   # t embedding     
+        #pdb.set_trace()
+        if condition is not None:
+            process_condition = self.condition_processor(condition)
+
+            x = torch.cat([x, process_condition] , dim=1)
+
+        #pdb.set_trace()
         # Encoder.
         skips = []
         aux = x
@@ -589,162 +703,6 @@ class SongUNet3D(torch.nn.Module):
         return aux
 
 
-class SongUNet(torch.nn.Module):
-    def __init__(self,
-        img_resolution,                     # Image resolution at input/output.
-        in_channels,                        # Number of color channels at input.
-        out_channels,                       # Number of color channels at output.
-        label_dim           = 0,            # Number of class labels, 0 = unconditional.
-        augment_dim         = 0,            # Augmentation label dimensionality, 0 = no augmentation.
-        model_channels      = 128,          # Base multiplier for the number of channels.
-        channel_mult        = [1,2,2,2],    # Per-resolution multipliers for the number of channels.
-        channel_mult_emb    = 4,            # Multiplier for the dimensionality of the embedding vector.
-        num_blocks          = 4,            # Number of residual blocks per resolution.
-        attn_resolutions    = [16],         # List of resolutions with self-attention.
-        dropout             = 0.10,         # Dropout probability of intermediate activations.
-        label_dropout       = 0,            # Dropout probability of class labels for classifier-free guidance.
-
-        embedding_type      = 'positional', # Timestep embedding type: 'positional' for DDPM++, 'fourier' for NCSN++.
-        channel_mult_noise  = 1,            # Timestep embedding size: 1 for DDPM++, 2 for NCSN++.
-        encoder_type        = 'standard',   # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
-        decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
-        resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
-        implicit_mlp        = False,        # enable implicit coordinate encoding
-    ):
-        assert embedding_type in ['fourier', 'positional']
-        assert encoder_type in ['standard', 'skip', 'residual']
-        assert decoder_type in ['standard', 'skip']
-
-        super().__init__()
-        self.label_dropout = label_dropout
-        emb_channels = model_channels * channel_mult_emb
-        noise_channels = model_channels * channel_mult_noise
-        init = dict(init_mode='xavier_uniform')
-        init_zero = dict(init_mode='xavier_uniform', init_weight=1e-5)
-        init_attn = dict(init_mode='xavier_uniform', init_weight=np.sqrt(0.2))
-        block_kwargs = dict(
-            emb_channels=emb_channels, num_heads=1, dropout=dropout, skip_scale=np.sqrt(0.5), eps=1e-6,
-            resample_filter=resample_filter, resample_proj=True, adaptive_scale=False,
-            init=init, init_zero=init_zero, init_attn=init_attn,
-        )
-
-        # Mapping.
-        self.map_noise = PositionalEmbedding(num_channels=noise_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=noise_channels)
-        self.map_label = Linear(in_features=label_dim, out_features=noise_channels, **init) if label_dim else None
-        self.map_augment = Linear(in_features=augment_dim, out_features=noise_channels, bias=False, **init) if augment_dim else None
-        self.map_layer0 = Linear(in_features=noise_channels, out_features=emb_channels, **init)
-        self.map_layer1 = Linear(in_features=emb_channels, out_features=emb_channels, **init)
-
-        # Encoder.
-        self.enc = torch.nn.ModuleDict()
-        cout = in_channels
-        caux = in_channels
-        for level, mult in enumerate(channel_mult):
-            res = img_resolution >> level
-            print(" level : " , level)
-            print(' multi :' , mult)
-            if level == 0:
-                cin = cout
-                cout = model_channels
-                if implicit_mlp:
-                    self.enc[f'{res}x{res}_conv'] = torch.nn.Sequential(
-                                                        Conv2d(in_channels=cin, out_channels=cout, kernel=1, **init),
-                                                        torch.nn.SiLU(),
-                                                        Conv2d(in_channels=cout, out_channels=cout, kernel=1, **init),
-                                                        torch.nn.SiLU(),
-                                                        Conv2d(in_channels=cout, out_channels=cout, kernel=1, **init),
-                                                        torch.nn.SiLU(),
-                                                        Conv2d(in_channels=cout, out_channels=cout, kernel=3, **init),
-                                                    )
-                    self.enc[f'{res}x{res}_conv'].out_channels = cout
-                else:
-                    self.enc[f'{res}x{res}_conv'] = Conv2d(in_channels=cin, out_channels=cout, kernel=3, **init)
-            else:
-                self.enc[f'{res}x{res}_down'] = UNetBlock(in_channels=cout, out_channels=cout, down=True, **block_kwargs)
-                if encoder_type == 'skip':
-                    self.enc[f'{res}x{res}_aux_down'] = Conv2d(in_channels=caux, out_channels=caux, kernel=0, down=True, resample_filter=resample_filter)
-                    self.enc[f'{res}x{res}_aux_skip'] = Conv2d(in_channels=caux, out_channels=cout, kernel=1, **init)
-                if encoder_type == 'residual':
-                    self.enc[f'{res}x{res}_aux_residual'] = Conv2d(in_channels=caux, out_channels=cout, kernel=3, down=True, resample_filter=resample_filter, fused_resample=True, **init)
-                    caux = cout
-            for idx in range(num_blocks):
-                cin = cout
-                cout = model_channels * mult
-                attn = (res in attn_resolutions)
-                self.enc[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
-        skips = [block.out_channels for name, block in self.enc.items() if 'aux' not in name]
-
-        # Decoder.
-        self.dec = torch.nn.ModuleDict()
-        for level, mult in reversed(list(enumerate(channel_mult))):
-            res = img_resolution >> level
-            if level == len(channel_mult) - 1:
-                self.dec[f'{res}x{res}_in0'] = UNetBlock(in_channels=cout, out_channels=cout, attention=True, **block_kwargs)
-                self.dec[f'{res}x{res}_in1'] = UNetBlock(in_channels=cout, out_channels=cout, **block_kwargs)
-            else:
-                self.dec[f'{res}x{res}_up'] = UNetBlock(in_channels=cout, out_channels=cout, up=True, **block_kwargs)
-            for idx in range(num_blocks + 1):
-                cin = cout + skips.pop()
-                cout = model_channels * mult
-                attn = (idx == num_blocks and res in attn_resolutions)
-                self.dec[f'{res}x{res}_block{idx}'] = UNetBlock(in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
-            if decoder_type == 'skip' or level == 0:
-                if decoder_type == 'skip' and level < len(channel_mult) - 1:
-                    self.dec[f'{res}x{res}_aux_up'] = Conv2d(in_channels=out_channels, out_channels=out_channels, kernel=0, up=True, resample_filter=resample_filter)
-                self.dec[f'{res}x{res}_aux_norm'] = GroupNorm(num_channels=cout, eps=1e-6)
-                self.dec[f'{res}x{res}_aux_conv'] = Conv2d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)
-
-    def forward(self, x, noise_labels, class_labels=None, augment_labels=None):
-        # Mapping.
-        #pdb.set_trace()
-        emb = self.map_noise(noise_labels) # time embedding 
-        emb = emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape) # swap sin/cos
-        if self.map_label is not None:
-            tmp = class_labels
-            if self.training and self.label_dropout:
-                tmp = tmp * (torch.rand([x.shape[0], 1], device=x.device) >= self.label_dropout).to(tmp.dtype)
-            emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
-        if self.map_augment is not None and augment_labels is not None:
-            emb = emb + self.map_augment(augment_labels)
-        emb = silu(self.map_layer0(emb)) # 1 256 
-        emb = silu(self.map_layer1(emb)) # 1 512   # t embedding 
-                                                       
-        # Encoder.
-        skips = []
-        aux = x
-        #pdb.set_trace()
-        for name, block in self.enc.items():
-            #print(" name :" , name)
-            if 'aux_down' in name:
-                aux = block(aux)
-            elif 'aux_skip' in name:
-                x = skips[-1] = x + block(aux)
-            elif 'aux_residual' in name:
-                x = skips[-1] = aux = (x + block(aux)) / np.sqrt(2)
-            else:
-                #pdb.set_trace()
-                x = block(x, emb) if isinstance(block, UNetBlock) else block(x)
-                skips.append(x)
-
-        # Decoder.
-        aux = None
-        tmp = None
-        for name, block in self.dec.items():
-            #print(" name  " , name)
-            if 'aux_up' in name:
-                aux = block(aux)
-            elif 'aux_norm' in name:
-                tmp = block(x)
-            elif 'aux_conv' in name:
-                tmp = block(silu(tmp))
-                aux = tmp if aux is None else tmp + aux
-            else:
-                if x.shape[1] != block.in_channels:
-                    x = torch.cat([x, skips.pop()], dim=1)
-                x = block(x, emb)
-        #pdb.set_trace()
-        return aux
-    
 
 def test_demo_unet2d():
     img_resolution = 256    # 图像分辨率

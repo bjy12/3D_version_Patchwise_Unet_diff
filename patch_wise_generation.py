@@ -9,15 +9,17 @@ from dataclasses import dataclass
 import numpy as np
 import pickle
 import safetensors
-from model.network import PCC_Net
-from model.SongUnet import Slice_UNet
+from model.Song3DUnet import  Song_Unet3D
 from diffusers import DDPMPipeline, DDPMScheduler
 import pdb
 import SimpleITK as sitk
-from datasets.datautils3d import load_with_coord
+from datasets.geometry import Geometry
+
+from datasets.datautils3d import load_with_coord , load_diffusion_condition
 from datasets.slicedataset import load_slice_dataset
+from pachify_and_projector import pachify3d_projected_points , full_volume_inference_process
 import matplotlib.pyplot as plt
-import json
+import yaml
 from datetime import datetime
 from einops import rearrange
 @dataclass
@@ -32,6 +34,192 @@ class MyCustom3DOutput(BaseOutput):
 
     image : np.ndarray 
 
+
+class ProjectedBaseDDPMPipline(DiffusionPipeline):
+    model_cpu_offload_seq = "net"
+
+    def __init__(self , net , scheduler ):
+        super().__init__()
+        #pdb.set_trace()
+        self.register_modules(net=net, scheduler=scheduler)
+        self.weight_dtype = torch.float32
+        self.projector = None
+        self._device = None
+    
+    @property
+    def device(self):
+        if self._device is None:
+            # Default to CUDA if available, otherwise CPU
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return self._device
+
+    def set_device(self, device):
+        self._device = device
+
+    def init_projector(self, geo_cfg):
+        with open(geo_cfg , 'r' ) as f :
+            dst_cfg = yaml.safe_load(f)
+            out_res = np.array(dst_cfg['dataset']['resolution'])
+            self.projector = Geometry(dst_cfg['projector'])    
+
+    def sample_patch_wise(self , batch_step , projs , clean_images , angles , generator,patch_size,save_intermediate_dir,save_step_interval):
+        patch_image_tensor , patch_pos_tensor , projs_points_tensor =  pachify3d_projected_points(clean_images , patch_size , angles , self.projector)
+
+        projs_points_tensor = projs_points_tensor.to(self.weight_dtype)
+        b , c , h , w, d  = patch_image_tensor.shape
+        image_shape = ( b , c ,h , w, d )
+        image = randn_tensor(image_shape , generator=generator , device=self.device)
+        
+        current_image = torch.concat([image, patch_pos_tensor] , dim=1)
+
+        for step_idx , t in enumerate(self.progress_bar(self.scheduler.timesteps)):
+
+            t_ = t
+            t = t.expand(current_image.shape[0]).to(self.device)
+
+            model_output = self.net(current_image, t , projs , projs_points_tensor)
+
+            pos = current_image[:,1:4,...]
+            noise_part = current_image[:,:1,...]
+
+            updated_noise  = self.scheduler.step(model_output, t_, noise_part, return_dict=True , generator=generator)
+
+
+            current_image = torch.cat([updated_noise.prev_sample , pos], dim=1)
+            
+            if save_intermediate_dir is not None and step_idx % save_step_interval == 0:
+                pred_x0 = updated_noise.pred_original_sample
+                # 转换到[0,1]范围
+                intermediate_image = (pred_x0 / 2 + 0.5).clamp(0, 1)
+                intermediate_image = intermediate_image.cpu().numpy()
+                # 为每个batch样本保存一个文件
+                save_path = os.path.join(
+                        save_intermediate_dir, 
+                        f'step_{step_idx:04d}_sample_{batch_step}.nii.gz')
+                sitk_save(save_path, intermediate_image, uint8=True)
+
+        pdb.set_trace()
+        current_image = (current_image / 2 + 0.5 ).clamp(0,1)
+        current_image = current_image[:,:1,...].cpu().numpy()
+        gt_image  = patch_image_tensor.cpu().numpy() 
+        return MyCustom3DOutput(image = current_image)  , gt_image
+    def sample_full_volume(self, batch_step , block_size , projs , clean_images , angles , generator, save_intermediate_dir, save_step_interval):  
+        pdb.set_trace()
+        image_blocks , pos_blocks , proj_points_tensor , blocks_info= full_volume_inference_process(clean_images , patch_size= 128 , block_size=16 , angles=angles , projector=self.projector)
+        proj_points_tensor = proj_points_tensor.to(self.weight_dtype)
+        # Get original volume shape from blocks_info
+        num_blocks = image_blocks.shape[0]
+        B, C, block_d, block_h, block_w = image_blocks.shape[1:]
+        
+        # Initialize noise for all blocks
+        blocks_shape = image_blocks.shape
+        noise_blocks = randn_tensor(blocks_shape, generator=generator, device=self.device)
+
+        processed_blocks = []
+
+        for block_idx in range(num_blocks):
+            current_noise = noise_blocks[block_idx]
+            current_pos = pos_blocks[block_idx]
+            current_proj_points = proj_points_tensor[block_idx * B:(block_idx + 1) * B]
+
+            # Combine noise and position information
+            current_image = torch.cat([current_noise, current_pos], dim=1)
+
+            for step_idx , t in enumerate(self.progress_bar(self.scheduler.timesteps)):
+                t_ = t 
+                t = t.expand(current_image.shape[0]).to(self.device)
+                
+                model_output = self.net(current_image , t , projs , current_proj_points)
+                
+                # Split position and noise information
+                pos = current_image[:, 1:4, ...]
+                noise_part = current_image[:, :1, ...]
+                
+                # Update noise using scheduler
+                updated_noise = self.scheduler.step(
+                    model_output, t_, noise_part, 
+                    return_dict=True, generator=generator
+                )
+                
+                # Combine updated noise with position information
+                current_image = torch.cat([updated_noise.prev_sample, pos], dim=1)
+
+                # Process final block result
+            final_block = (current_image[:, :1, ...] / 2 + 0.5).clamp(0, 1)
+            processed_blocks.append(final_block) 
+
+
+                # Stack all processed blocks
+        all_blocks = torch.stack(processed_blocks, dim=0)
+        
+        # Reconstruct full volume
+        # Calculate final volume dimensions based on block arrangement
+        D = blocks_info['num_blocks_d'] * block_size
+        H = blocks_info['num_blocks_h'] * block_size
+        W = blocks_info['num_blocks_w'] * block_size
+        
+        # Initialize final volume tensor
+        final_volume = torch.zeros((B, 1, D, H, W), device=self.device)
+        
+        # Place blocks back in their original positions
+        block_idx = 0
+        for d in range(blocks_info['num_blocks_d']):
+            for h in range(blocks_info['num_blocks_h']):
+                for w in range(blocks_info['num_blocks_w']):
+                    d_start = d * block_size
+                    h_start = h * block_size
+                    w_start = w * block_size
+                    
+                    d_end = min((d + 1) * block_size, D)
+                    h_end = min((h + 1) * block_size, H)
+                    w_end = min((w + 1) * block_size, W)
+                    
+                    final_volume[:, :, d_start:d_end, h_start:h_end, w_start:w_end] = \
+                        all_blocks[block_idx]
+                    
+                    block_idx += 1
+
+        return MyCustom3DOutput(image = final_volume) ,  clean_images.cpu().numpy()             
+        
+   
+    @torch.no_grad()
+    def __call__(
+        self,
+        batch,
+        batch_step,
+        num_inference_steps: int = 1000,
+        sample_type:str = 'patch',
+        patch_size:int = 16,
+        block_size:int = 16,
+        generator: Optional[torch.Generator] = None,
+        output_type: Optional[str] = "pil",
+        return_dict: bool = True ,
+        save_intermediate_dir: Optional[str] = None,
+        save_step_interval: int = 100,  # 每隔多少步保存一次
+        **kwargs,
+    ):  
+        pdb.set_trace()
+
+        projs = batch['projs'].to(device=self.device, dtype=self.weight_dtype)
+        clean_images = batch['gt_idensity'].to(device=self.device, dtype=self.weight_dtype)
+        angles = batch['angles'].to(device=self.device)  # Keep angles in default dtype
+        pdb.set_trace()
+        
+        self.scheduler.set_timesteps(num_inference_steps)
+        if sample_type == 'patch':
+            pred_image , gt_image = self.sample_patch_wise(batch_step , projs , clean_images , angles , generator, patch_size , save_intermediate_dir,save_step_interval)
+            results = pred_image['image']
+
+            return results , gt_image
+        elif sample_type == 'full_volume':
+            full_pred_image , gt_image = self.sample_full_volume(batch_step , block_size , projs , clean_images , angles , generator , save_intermediate_dir , save_step_interval)
+            results = full_pred_image['image']
+            return results , gt_image
+
+
+
+        
+        
 class PosBaseDDPMPipeline(DiffusionPipeline):
     model_cpu_offload_seq = "net"
 
@@ -114,16 +302,20 @@ class PosBaseDDPMPipeline(DiffusionPipeline):
         return MyCustom3DOutput(image = current_image) 
 
 
-
-
-def ddpm_process_overlap_blocks(model_config ,safetensors_path , blocks_coords_path ,inference_time_steps , save_path_root):
-    save_sample_path = os.path.join(save_path_root,'sample')
-    save_gt_path = os.path.join(save_path_root,'gt')
-    os.makedirs(save_path_root , exist_ok=True)
-    os.makedirs(save_sample_path,exist_ok=True)
+def projected_condition_process():
+    model_config = './logging_dir/checkpoint-164000/unet/config.json'
+    safetensors_path = './logging_dir/checkpoint-164000/unet/diffusion_pytorch_model.safetensors'
+    infernect_time_steps = 500
+    save_path = './projected_condition/'
+    save_sample = os.path.join(save_path, 'sample')
+    save_gt_path = os.path.join(save_path, 'gt')
+    save_intermediate_dir = os.path.join(save_path , 'intermediate_log')
+    os.makedirs(save_path , exist_ok=True)
+    os.makedirs(save_sample,exist_ok=True)
     os.makedirs(save_gt_path , exist_ok=True)
+    os.makedirs(save_intermediate_dir , exist_ok=True)
 
-    model =  PCC_Net.from_config(model_config)
+    model = Song_Unet3D.from_config(model_config)
     check_points = safetensors.torch.load_file(safetensors_path)
     model.load_state_dict(check_points)
     #load training weight 
@@ -132,115 +324,31 @@ def ddpm_process_overlap_blocks(model_config ,safetensors_path , blocks_coords_p
         beta_schedule='linear',
         prediction_type='epsilon'
     )
-    pipeline = CustomDDPMPipeline(model , noise_scheduler)
-    pipeline.to('cuda')
-    if blocks_coords_path is not None: 
-        overlap_blocks = np.load(blocks_coords_path)
-        overlap_blocks = overlap_blocks.astype(np.float32)
-        
-    generator = torch.Generator(device=pipeline.device).manual_seed(0)
+    pipline = ProjectedBaseDDPMPipline(model, noise_scheduler)
+    pipline.to('cuda')
+    image_root = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/'
+    file_list_path = './files_name/pelvic_coord_train_16.txt'
+    geo_config_path =  './geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'
+    pipline.init_projector(geo_config_path)
 
-    #pdb.set_trace()
-    for i in range(overlap_blocks.shape[0]-1):
-        coords = overlap_blocks[i]
-        coords = torch.from_numpy(coords)
-        coords = coords.to('cuda')
-        images , intermediate_results  = pipeline(generator=generator,batch_size=1,
-                                                num_inference_steps=inference_time_steps, use_coord=True ,
-                                                inference_type='overlap',overlap_coords=coords ,slice_index=None,
-                                                output_type="np")
-        #pdb.set_trace()
-        pred_save_path =  os.path.join(save_sample_path , f"blocks_{i}_sample.nii.gz")
-        pred_image = images['image']
-        pred_image = pred_image.squeeze(0).squeeze(0)
-        #pdb.set_trace()
-        sitk_save( pred_save_path , pred_image , uint8=True)
-
-
-def ddpm_process():
-    model_config = '/root/codespace/diffusers_pcc/output_log/slice_traning/checkpoint-148000/unet/config.json'
-    #model_path = 'F:/Code_Space/DiffusersExample/diffuser_pcc/output_log/ddpm_0/checkpoint-12000/random_states_0.pkl'  # Update this path to your model.pkl file
-    #scheduler_path = 'F:/Code_Space/DiffusersExample/diffuser_pcc/output_log/ddpm_0/checkpoint-12000/scheduler.bin'  # Update this path to your scheduler.bin file
-    safetensors_path = '/root/codespace/diffusers_pcc/output_log/slice_traning/checkpoint-148000/unet/diffusion_pytorch_model.safetensors'  # Update to your safetensors file
-    inference_time_steps = 500 
-    save_path_root = f'./slice_ck_148000_{inference_time_steps}'  # Path to save the generated image
-    save_sample_path = os.path.join(save_path_root,'sample')
-    save_gt_path = os.path.join(save_path_root,'gt')
-    os.makedirs(save_path_root , exist_ok=True)
-    os.makedirs(save_sample_path,exist_ok=True)
-    os.makedirs(save_gt_path , exist_ok=True)
-    #image_shape = (1, 3, 64, 64, 64)  # Adjust the shape based on your model (e.g., 3D image shape)
-    #ckpt_path = 'F:\Code_Space\DiffusersExample\diffuser_pcc\output_log\ddpm_0\checkpoint-12000'
-    #scheduler_path = DDPMScheduler.from_config(scheduler_path)
-    #model =  PCC_Net.from_config(model_config)
-    # 
-    model = Slice_UNet.from_config(model_config)
-    check_points = safetensors.torch.load_file(safetensors_path)
-    model.load_state_dict(check_points)
-    #load training weight 
-    noise_scheduler = DDPMScheduler(
-        num_train_timesteps=1000,
-        beta_schedule='linear',
-        prediction_type='epsilon'
-    )
-    pipeline = CustomDDPMPipeline(model , noise_scheduler)
-    pipeline.to('cuda')
-    image_root: str = '/root/share/slice_aixs_dataset'
-    coord_root: str = '/root/share/pcc_gan_demo/pcc_gan_demo_centriod/train/coords'
-    files_list_path: str = './files_list/p_train_demo.txt'
-    overlap_blocks_path : str = '/root/share/pcc_gan_demo/cnetrilize_overlap_blocks_64/blocks/blocks_coords.npy'
-    if overlap_blocks_path is not None: 
-        overlap_blocks = np.load(overlap_blocks_path)
-
-    batch_size = 1
-    #dataset = load_with_coord(img_root=image_root , coord_root= coord_root, files_list_path=files_list_path )
-    dataset = load_slice_dataset(img_root= image_root , files_list=  files_list_path)
-    train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=1)
-    generator = torch.Generator(device=pipeline.device).manual_seed(0)
-    # run pipeline in inference (sample random noise and denoise)
-    # pdb.set_trace()
+    dataset = load_diffusion_condition(image_root , file_list_path)
+    train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)
+    generator = torch.Generator(device=pipline.device).manual_seed(0)
+    pdb.set_trace()
     for step , batch in enumerate(train_dataloader):
-        if step >= 50:  # 当达到100步时停止
-            break
-        #pdb.set_trace()
-        #input_data = batch[0].to('cuda')
-        #gt_image = batch[1].cpu().numpy()
-        #pdb.set_trace()
-        coords = batch['coords'].to('cuda')
-        slice_gt = batch['value'].cpu().numpy()
-        name = batch['name'][0]
-        axes = batch['axes'][0]
-        slice_number = batch['slice_number'][0]
-        save_name = f"{name}_{axes}_{slice_number}.nii.gz"
-        #pdb.set_trace()
-        save_slice_sample_path = os.path.join(save_sample_path , save_name)
-        save_slice_gt_path = os.path.join(save_gt_path , save_name)
+        pdb.set_trace()
+        images , gt_image = pipline(batch ,step , num_inference_steps=infernect_time_steps , generator=generator , patch_size=128 ,sample_type='full_volume' ,save_intermediate_dir=save_intermediate_dir , save_step_interval=100)
+        results = images['image']
+        pdb.set_trace()
+        sitk_save(save_sample + f'/{step}.nii.gz' , results , uint8=True)
+        sitk_save(save_gt_path+ f'/{step}.nii.gz' , gt_image, uint8=True)
 
-        #pdb.set_trace()
-        images , intermediate_results  = pipeline(generator=generator,batch_size=batch_size,inputs_tensor=coords,
-                                                  num_inference_steps=inference_time_steps, use_coord=True ,image_size=256,
-                                                  inference_type='slice_unet',slice_index=None,
-                                                  output_type="np")
-        denoised_image = images['image']
-        #pdb.set_trace()
-        save_slice_image(slice_gt, save_slice_gt_path)
-        save_slice_image(denoised_image ,save_slice_sample_path)
-        #pdb.set_trace()
-        # save_batch_image(denoised_image , save_sample_path , inference_step=step,ts=inference_time_steps)
-        #pdb.set_trace()
-        # save_batch_image(slice_gt ,save_gt_path ,  inference_step=step,ts=inference_time_steps )
-            # 保存图像
-        #intermediate_dir =  os.path.join(save_path_root, f'batch_{step}')
-        #save_intermediate_results(intermediate_results, intermediate_dir)
 
-        #save_pred_from_noise(images, save_path, inference_step=step, ts=inference_time_steps)
-        
-        # 保存和可视化统计信息
-        #save_and_plot_stats(stats_logs, save_path_root, step)
-    #pdb.set_trace()
-    #images = images['image']
-    #pdb.set_trace()
-    #sitk_save(output_path , images , uint8 =True)
+
+
+
+
+
 
 def save_slice_image(images, save_path):
     N = images.shape[0]
@@ -294,8 +402,7 @@ def sitk_save(path, image, spacing=None, uint8=False):
 
 
 if __name__ == '__main__':
-    ddpm_process()
-    
+    projected_condition_process()
 
     # model_config = 'output_log/overlap_blocks_ddpm/checkpoint-240000/unet/config.json'
     # safetensors_path = 'output_log/overlap_blocks_ddpm/checkpoint-240000/unet/diffusion_pytorch_model.safetensors' 

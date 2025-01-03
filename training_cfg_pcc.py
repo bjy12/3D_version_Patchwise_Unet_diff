@@ -55,8 +55,8 @@ class BaseTrainingConfig:
         'img_resolution':128,
         'in_channels': 4, 
         'out_channels': 1, # 1 + 3 
-    })
- 
+    })  
+
     # Training
     seed: int = None
     num_epochs: int = 200
@@ -66,14 +66,18 @@ class BaseTrainingConfig:
     mixed_precision: str = None
     enable_xformers_memory_efficient_attention: bool = True
     gradient_checkpointing: bool = False
-    eval_vis: bool = True
+    eval_vis: bool = False
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/images'
+    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
-    files_list_path: str = './files_list/p_train_demo.txt'
-
+    files_list_path: str = './files_name/pelvic_coord_train_16.txt'
+    geo_cfg_path: str = './geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'
+    
+    # 
+    use_multi_patch_size: bool = False  
+    pachify_size: int = 16
 
     # LR Scheduler
     lr_scheduler: str = 'constant'

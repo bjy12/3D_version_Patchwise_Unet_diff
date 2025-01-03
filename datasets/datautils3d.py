@@ -9,10 +9,9 @@ import yaml
 from copy import deepcopy
 from torch.utils.data import Dataset, DataLoader
 from einops import rearrange
-
 #from utils import sitk_load ,get_filesname_from_txt
 import pdb
-
+import pickle
 
 PATH_DICT = {
 'image': 'images/{}.nii.gz',
@@ -344,6 +343,70 @@ class Diffusion_Unconditional_Dataset(Dataset):
 
         return super().__getitem__(index)    
 
+class Diffusion_Condition_Dataset(Dataset):
+    def __init__(self , root_data ,file_names , path_dict ,mode='train' , out_res_scale=1.0 , patch_size=16):
+        super().__init__()
+
+        self.files_names = file_names
+        self.data_root = root_data
+        self._path_dict = deepcopy(path_dict)
+        for key in self._path_dict.keys():
+            path = os.path.join(self.data_root, self._path_dict[key])
+            self._path_dict[key] = path
+        #pdb.set_trace()
+         
+
+    def __len__(self):
+        return len(self.files_names)
+    def load_ct(self, name):
+        image, _ = sitk_load(
+            os.path.join(self.data_root,  self._path_dict['image'].format(name)),
+            uint8=True
+        ) # float32
+        return image   
+    def sample_projections(self, name, n_view=None):
+        # -- load projections
+        with open(os.path.join(self.data_root, self._path_dict['projs'].format(name)), 'rb') as f:
+            data = pickle.load(f)
+            projs = data['projs']         # uint8: [K, W, H]
+            projs_max = data['projs_max'] # float
+            angles = data['angles']       # float: [K,]
+
+        if n_view is None:
+            n_view = self.num_views
+
+        # -- sample projections
+        views = np.linspace(0, len(projs), n_view, endpoint=False).astype(int) # endpoint=False as the random_views is True during training, i.e., enabling view offsets.
+
+        projs = projs[views].astype(np.float32) / 255.
+        projs = projs[:, None, ...]
+        angles = angles[views]
+
+        # -- de-normalization
+        projs = projs * projs_max / 0.2
+
+        return projs, angles     
+      
+    def __getitem__(self, index):
+        name = self.files_names[index]
+
+        gt_idensity = self.load_ct(name)
+
+        projs, angles = self.sample_projections(name ,n_view=2)
+        #pdb.set_trace()
+
+        ret_dict = {
+            'name':name,
+            'gt_idensity': gt_idensity,
+            'projs': projs,
+            'angles': angles,
+        }
+        return ret_dict
+
+
+
+
+
 
 
 def loadSelf_learningData(root,batch_size , shuffle= True):
@@ -388,6 +451,12 @@ def load_diffusion_unconditional(root_data):
 
     return dataset
 
+def load_diffusion_condition(root_data , files_name_path):
+    files_name = get_filesname_from_txt(files_name_path)
+    dataset = Diffusion_Condition_Dataset(root_data , files_name ,path_dict= PATH_DICT , mode='train') 
+    #d_s_0 = dataset[0]
+
+    return dataset
 
 
 
@@ -409,5 +478,8 @@ if __name__ == '__main__':
     # file_list_path = './files_list/p_train_demo.txt'
     # load_diffusion_overlap_blocks(root_path, file_list_path)
 
-    root_path = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/images'
-    load_diffusion_unconditional(root_path)
+    root_path = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/'
+    # load_diffusion_unconditional(root_path)
+    files_name = 'F:/Code_Space/diffusers_v2/diffusers_pcc-demo_exp_0/diffusers_pcc-demo_exp_0/files_name/pelvic_coord_train_16.txt'
+    geo_config = 'F:/Code_Space/diffusers_v2/diffusers_pcc-demo_exp_0/diffusers_pcc-demo_exp_0/geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'
+    load_diffusion_condition(root_data=root_path , files_name_path=files_name , geo_config=geo_config)

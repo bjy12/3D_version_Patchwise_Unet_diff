@@ -31,7 +31,7 @@ from diffusers.utils import check_min_version, is_accelerate_version, is_tensorb
 from diffusers.utils.import_utils import is_xformers_available
 
 #from ddpm_process import save_pred_from_noise
-from pachify import pachify3D
+from pachify_and_projector import pachify3D
 from training_cfg_pcc import BaseTrainingConfig
 from utils import save_pred_to_local
 import pdb
