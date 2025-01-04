@@ -347,7 +347,7 @@ def main():
                 num_update_steps_per_epoch * cfg.gradient_accumulation_steps)
 
     # Train!
-    # Train progressive patch size 
+    # Train progressive patch size     
     if cfg.use_multi_patch_size:
         batch_mul_dict = {64:2 , 32:2 , 16:2 }
         real_p = 0.5 # 选择每个patch size的概率
@@ -359,6 +359,13 @@ def main():
         progressive = True
     else:
         patch_size = cfg.pachify_size
+    # patch pos 
+    start_pos = (128 - 64) // 2 
+    positions = {
+        'i': start_pos ,
+        'j': start_pos ,
+        'k': start_pos ,
+    }    
     
     for epoch in range(first_epoch, cfg.num_epochs):
         model.train()
@@ -385,11 +392,11 @@ def main():
                 patch_size = patch_size
                 #batch_mul = batch_mul_dict[patch_size]
             #batch_mul = batch_mul_dict[patch_size] // batch_mul_dict[img_resolution]
-            #pdb.set_trace()
+            pdb.set_trace()
             projs = batch['projs'].to(weight_dtype)
             clean_images = batch['gt_idensity'].to(weight_dtype)
             angles = batch['angles']
-            patch_image_tensor , patch_pos_tensor , projs_points_tensor =  pachify3d_projected_points(clean_images , patch_size , angles , projector)
+            patch_image_tensor , patch_pos_tensor , projs_points_tensor =  pachify3d_projected_points(clean_images , patch_size , angles , projector, patch_pos=positions)
             projs_points_tensor = projs_points_tensor.to(weight_dtype)
             #clean_images , images_pos =  pachify3D(clean_images , patch_size)
             #pdb.set_trace()

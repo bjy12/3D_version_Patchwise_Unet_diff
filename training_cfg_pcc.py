@@ -77,7 +77,7 @@ class BaseTrainingConfig:
     
     # 
     use_multi_patch_size: bool = False  
-    pachify_size: int = 16
+    pachify_size: int = 64
 
     # LR Scheduler
     lr_scheduler: str = 'constant'

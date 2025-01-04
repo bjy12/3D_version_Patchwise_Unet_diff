@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import yaml
 from datasets.geometry import Geometry
+from utils import sitk_save
 import pdb
 
 def pachify(images, patch_size, padding=None):
@@ -120,6 +121,115 @@ def pachify3D(images , patch_size , padding=None ):
     #pdb.set_trace()
     return padded, volumes_pos
 
+def extract3DPatch(images, patch_size, positions=None, padding=None):
+    """
+    Extract 3D patches from specified positions in the input volume
+    
+    Args:
+        images: Input 3D images tensor
+        patch_size: Size of patches to extract (int or tuple)
+        positions: Dict containing start positions for patches {'i': int/tensor, 'j': int/tensor, 'k': int/tensor}
+                  Can be single integers (same position for all batches) or tensors (different positions per batch)
+                  If None, will use random positions
+        padding: Optional padding size
+    """
+    device = images.device
+    batch_size = images.size(0)
+    images = images.unsqueeze(1)
+    resolution_d, resolution_h, resolution_w = images.size(2), images.size(3), images.size(4)
+    
+    # Handle patch size
+    if isinstance(patch_size, int):
+        td, th, tw = patch_size, patch_size, patch_size
+    else:
+        td, th, tw = patch_size
+    
+    # Handle padding
+    if padding is not None:
+        padded = torch.zeros((images.size(0), images.size(1),
+                            images.size(2)+padding*2,
+                            images.size(3)+padding*2,
+                            images.size(4)+padding*2), dtype=images.dtype, device=images.device)
+        padded[:, :, padding:-padding, padding:-padding, padding:-padding] = images
+    else:
+        padded = images
+    
+    d, h, w = padded.size(2), padded.size(3), padded.size(4)
+    
+    # Handle position selection
+    if positions is None:
+        # Use random positions if none specified
+        if w == tw and h == th and d == td:
+            i = torch.zeros((batch_size,), device=device).long()
+            j = torch.zeros((batch_size,), device=device).long()
+            k = torch.zeros((batch_size,), device=device).long()
+        else:
+            i = torch.randint(0, h - th + 1, (batch_size,), device=device)
+            j = torch.randint(0, w - tw + 1, (batch_size,), device=device)
+            k = torch.randint(0, d - td + 1, (batch_size,), device=device)
+    else:
+        # Convert single integers to tensors if necessary
+        i = positions['i']
+        j = positions['j']
+        k = positions['k']
+        
+        # If any position is a single integer, expand it to match batch size
+        if isinstance(i, (int, float)):
+            i = torch.full((batch_size,), int(i), device=device)
+        if isinstance(j, (int, float)):
+            j = torch.full((batch_size,), int(j), device=device)
+        if isinstance(k, (int, float)):
+            k = torch.full((batch_size,), int(k), device=device)
+            
+        # Convert to device if they're tensors
+        i = i.to(device) if torch.is_tensor(i) else torch.tensor(i, device=device)
+        j = j.to(device) if torch.is_tensor(j) else torch.tensor(j, device=device)
+        k = k.to(device) if torch.is_tensor(k) else torch.tensor(k, device=device)
+        
+        # Validate positions
+        if torch.any(i < 0) or torch.any(i > h - th):
+            raise ValueError(f"Invalid i positions. Must be between 0 and {h - th}")
+        if torch.any(j < 0) or torch.any(j > w - tw):
+            raise ValueError(f"Invalid j positions. Must be between 0 and {w - tw}")
+        if torch.any(k < 0) or torch.any(k > d - td):
+            raise ValueError(f"Invalid k positions. Must be between 0 and {d - td}")
+    
+    # Generate coordinate grids for patch extraction
+    rows = torch.arange(th, dtype=torch.long, device=device) + i[:, None]
+    columns = torch.arange(tw, dtype=torch.long, device=device) + j[:, None]
+    depths = torch.arange(td, dtype=torch.long, device=device) + k[:, None]
+    
+    # Extract patches
+    padded = padded.permute(1, 0, 2, 3, 4)
+    padded = padded[:, torch.arange(batch_size)[:, None, None, None],
+                    columns[:, torch.arange(tw)[:, None, None]],  # x
+                    rows[:, None, torch.arange(th)[:, None]],     # y
+                    depths[:, None, None]]                        # z
+    padded = padded.permute(1, 0, 2, 3, 4)
+    
+    # Generate position encodings
+    x_pos = torch.arange(tw, dtype=torch.long, device=device)
+    y_pos = torch.arange(th, dtype=torch.long, device=device)
+    z_pos = torch.arange(td, dtype=torch.long, device=device)
+    
+    # Create 3D position grid
+    x, y, z = torch.meshgrid(x_pos, y_pos, z_pos, indexing='ij')
+    
+    # Expand dimensions for batch size and add offsets
+    x_pos = x.unsqueeze(0).repeat(batch_size, 1, 1, 1) + j.view(-1, 1, 1, 1)
+    y_pos = y.unsqueeze(0).repeat(batch_size, 1, 1, 1) + i.view(-1, 1, 1, 1)
+    z_pos = z.unsqueeze(0).repeat(batch_size, 1, 1, 1) + k.view(-1, 1, 1, 1)
+    
+    # Normalize positions to [0,1]
+    x_pos = (x_pos / (resolution_w - 1))
+    y_pos = (y_pos / (resolution_h - 1))
+    z_pos = (z_pos / (resolution_d - 1))
+    
+    # Combine position encodings
+    volumes_pos = torch.stack((x_pos, y_pos, z_pos), dim=1)
+    
+    return padded, volumes_pos
+
 
 def init_projector(geo_cfg ):
     with open(geo_cfg , 'r' ) as f :
@@ -141,12 +251,26 @@ def project_points(points , angles , projector):
     
     return points_proj
 
-def pachify3d_projected_points(clean_image , patch_size , angles , projector):
+def pachify3d_projected_points(clean_image , patch_size , angles , projector , patch_pos=None):
     #pdb.set_trace()
     device = clean_image.device
-    patch_image , patch_pos = pachify3D(clean_image , patch_size)
+    #patch_image , patch_pos = pachify3D(clean_image , patch_size)
+    patch_image , patch_pos  = extract3DPatch(images=clean_image , patch_size=patch_size, positions=patch_pos, padding=None )
+    pdb.set_trace()
     patch_image_np = patch_image.cpu().numpy()
     patch_pos_np = patch_pos.cpu().numpy() 
+    pdb.set_trace()
+    #sitk_save('patch_1.nii.gz',patch_image_np[0,0,...] ,uint8=True)
+    # sitk_save('patch_2.nii.gz',patch_image_np[1,0,...], uint8=True)
+    # sitk_save('patch_3.nii.gz',patch_image_np[2,0,...], uint8=True)
+    # sitk_save('patch_4.nii.gz',patch_image_np[3,0,...], uint8=True)
+    #full_image = clean_image.cpu().numpy()
+    #pdb.set_trace()
+    #sitk_save('_1.nii.gz',full_image[0,...] ,uint8=True)
+    # sitk_save('_2.nii.gz',full_image[1,...], uint8=True)
+    # sitk_save('_3.nii.gz',full_image[2,...], uint8=True)
+    # sitk_save('_4.nii.gz',full_image[3,...], uint8=True)
+    #pdb.set_trace()
     angles = angles[0,:].cpu().numpy()
     #pdb.set_trace()
         # 释放GPU内存

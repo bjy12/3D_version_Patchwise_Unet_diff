@@ -303,9 +303,9 @@ class PosBaseDDPMPipeline(DiffusionPipeline):
 
 
 def projected_condition_process():
-    model_config = './logging_dir/checkpoint-164000/unet/config.json'
-    safetensors_path = './logging_dir/checkpoint-164000/unet/diffusion_pytorch_model.safetensors'
-    infernect_time_steps = 500
+    model_config = './logging_dir/checkpoint-55000/unet/config.json'
+    safetensors_path = './logging_dir/checkpoint-55000/unet/diffusion_pytorch_model.safetensors'
+    infernect_time_steps = 1000
     save_path = './projected_condition/'
     save_sample = os.path.join(save_path, 'sample')
     save_gt_path = os.path.join(save_path, 'gt')
@@ -337,8 +337,9 @@ def projected_condition_process():
     pdb.set_trace()
     for step , batch in enumerate(train_dataloader):
         pdb.set_trace()
-        images , gt_image = pipline(batch ,step , num_inference_steps=infernect_time_steps , generator=generator , patch_size=128 ,sample_type='full_volume' ,save_intermediate_dir=save_intermediate_dir , save_step_interval=100)
-        results = images['image']
+        # sample type "patch" and "full_volume"
+        results , gt_image = pipline(batch ,step , num_inference_steps=infernect_time_steps , generator=generator , patch_size=32 ,sample_type='patch' ,save_intermediate_dir=save_intermediate_dir , save_step_interval=100)
+        #results = images['image']
         pdb.set_trace()
         sitk_save(save_sample + f'/{step}.nii.gz' , results , uint8=True)
         sitk_save(save_gt_path+ f'/{step}.nii.gz' , gt_image, uint8=True)
