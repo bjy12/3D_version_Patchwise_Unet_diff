@@ -367,6 +367,7 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         img_resolution,                     # Image resolution at input/output.
         in_channels,                        # Number of color channels at input.
         out_channels,                       # Number of color channels at output.
+        condition_mixer_out_channels,       # Number of summed channels at noise, coords , condition 
         label_dim           = 0,            # Number of class labels, 0 = unconditional.
         augment_dim         = 0,            # Augmentation label dimensionality, 0 = no augmentation.
 
@@ -416,10 +417,12 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         
 
 
-        self.model = SongUNet3D(
+        #self.model = SongUNet3D(
+        self.model = SongUNet3DV2(
             img_resolution = img_resolution,
             in_channels = in_channels,
             out_channels = out_channels,
+            condition_mixer_out_channels = condition_mixer_out_channels,
             label_dim = label_dim,
             model_channels = model_channels,
             channel_mult = channel_mult,
@@ -511,6 +514,204 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         #pdb.set_trace()
         pred = self.model(x , time_step , points_implict ,class_labels=class_labels)
         return pred
+
+
+
+
+# V2 change process condition and noise x order 
+# V2 first  use init condition mixer process conditions like coords or implicts function representation
+class SongUNet3DV2(torch.nn.Module):
+    def __init__(self,
+        img_resolution,                     # 3D体积分辨率
+        in_channels,                        # 输入通道数
+        out_channels,                       # 输出通道数
+        condition_mixer_out_channels,       # condition_mixer输出的特征通道数
+        label_dim           = 0,            # 类别标签维度
+        augment_dim         = 0,            # 增强标签维度
+        model_channels      = 128,          # 基础通道数
+        channel_mult        = [1,2,2,2],    # 通道数倍增
+        channel_mult_emb    = 4,            # 嵌入维度倍增
+        num_blocks          = 4,            # 每个分辨率的残差块数
+        attn_resolutions    = [16],         # 使用自注意力的分辨率
+        dropout             = 0.10,         # dropout率
+        label_dropout       = 0,            # 标签dropout率
+        embedding_type      = 'positional', 
+        channel_mult_noise  = 1,            
+        encoder_type        = 'standard',   
+        decoder_type        = 'standard',   
+        resample_filter     = [1,1],      # 扩展到3D的重采样滤波器
+        implicit_mlp        = False,
+        implict_condition_dim = 128,
+    ):
+        super(SongUNet3DV2, self).__init__()
+        assert embedding_type in ['fourier', 'positional']
+        assert encoder_type in ['standard', 'skip', 'residual']
+        assert decoder_type in ['standard', 'skip']
+        self.label_dropout = label_dropout
+        emb_channels = model_channels * channel_mult_emb
+        noise_channels = model_channels * channel_mult_noise
+        init = dict(init_mode='xavier_uniform')
+        init_zero = dict(init_mode='xavier_uniform', init_weight=1e-5)
+        init_attn = dict(init_mode='xavier_uniform', init_weight=np.sqrt(0.2))
+        block_kwargs = dict(
+            emb_channels=emb_channels, num_heads=1, dropout=dropout,
+            skip_scale=np.sqrt(0.5), eps=1e-6,
+            resample_filter=resample_filter, resample_proj=True,
+            adaptive_scale=False, init=init, init_zero=init_zero,
+            init_attn=init_attn,
+        )
+
+        self.map_noise = PositionalEmbedding(num_channels=noise_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=noise_channels)
+        self.map_label = Linear(in_features=label_dim, out_features=noise_channels, **init) if label_dim else None
+        self.map_augment = Linear(in_features=augment_dim, out_features=noise_channels, bias=False, **init) if augment_dim else None
+         
+        self.map_layer0 = Linear(in_features=noise_channels, out_features=emb_channels, **init)
+        self.map_layer1 = Linear(in_features=emb_channels, out_features=emb_channels, **init)
+
+        # 添加condition处理层
+        self.implict_dim = implict_condition_dim
+        # 修改condition处理层，让其更好地与输入特征融合
+        self.condition_mixer = nn.Sequential(
+            Conv3d(in_channels=in_channels + self.implict_dim, out_channels=condition_mixer_out_channels, kernel=1, **init),
+            nn.SiLU(),
+        )
+
+        # Modified mapping layers to include condition
+    
+        self.enc = torch.nn.ModuleDict()
+        self.dec = torch.nn.ModuleDict()
+        if condition_mixer_out_channels is not None:
+            cout = condition_mixer_out_channels     
+            caux = condition_mixer_out_channels
+        else:
+            cout = in_channels
+            caux = in_channels
+        for level, mult in enumerate(channel_mult):
+            res = img_resolution >> level
+            print(" level : " , level)
+            print(' multi :' , mult)
+            if level == 0:
+                cin = cout
+                cout = model_channels
+                if implicit_mlp:
+                    self.enc[f'{res}x{res}x{res}_conv'] = torch.nn.Sequential(
+                                                            Conv3d(in_channels=cin, out_channels=cout, kernel=1, **init),
+                                                            torch.nn.SiLU(),
+                                                            Conv3d(in_channels=cout, out_channels=cout, kernel=1, **init),
+                                                            torch.nn.SiLU(),
+                                                            Conv3d(in_channels=cout, out_channels=cout, kernel=1, **init),
+                                                            torch.nn.SiLU(),
+                                                            Conv3d(in_channels=cout, out_channels=cout, kernel=3, **init),
+                                                    )
+                    self.enc[f'{res}x{res}x{res}_conv'].out_channels = cout
+                else:
+                    self.enc[f'{res}x{res}x{res}_conv'] = Conv3d(in_channels=cin, out_channels=cout, kernel=3, **init)
+            else:
+                self.enc[f'{res}x{res}x{res}_down'] = UNetBlock3D(in_channels=cout, out_channels=cout, down=True, **block_kwargs)
+                if encoder_type == 'skip':
+                    self.enc[f'{res}x{res}x{res}_aux_down'] = Conv3d(in_channels=caux, out_channels=caux, kernel=0, down=True, resample_filter=resample_filter)
+                    self.enc[f'{res}x{res}x{res}_aux_skip'] = Conv3d(in_channels=caux, out_channels=cout, kernel=1, **init)
+                if encoder_type == 'residual':
+                    self.enc[f'{res}x{res}x{res}_aux_residual'] = Conv3d(in_channels=caux, out_channels=cout, kernel=3, down=True, resample_filter=resample_filter, fused_resample=True, **init)
+                    caux = cout
+            for idx in range(num_blocks):
+                cin = cout
+                cout = model_channels * mult
+                attn = (res in attn_resolutions)
+                self.enc[f'{res}x{res}x{res}_block{idx}'] = UNetBlock3D(in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
+       
+        skips = [block.out_channels for name, block in self.enc.items() if 'aux' not in name]
+
+        # Decoder.
+        self.dec = torch.nn.ModuleDict()
+        for level, mult in reversed(list(enumerate(channel_mult))):
+            res = img_resolution >> level
+            if level == len(channel_mult) - 1:
+                self.dec[f'{res}x{res}x{res}_in0'] = UNetBlock3D(in_channels=cout, out_channels=cout, attention=True, **block_kwargs)
+                self.dec[f'{res}x{res}x{res}_in1'] = UNetBlock3D(in_channels=cout, out_channels=cout, **block_kwargs)
+            else:
+                self.dec[f'{res}x{res}x{res}_up'] = UNetBlock3D(in_channels=cout, out_channels=cout, up=True, **block_kwargs)
+            for idx in range(num_blocks + 1):
+                cin = cout + skips.pop()
+                cout = model_channels * mult
+                attn = (idx == num_blocks and res in attn_resolutions)
+                self.dec[f'{res}x{res}x{res}_block{idx}'] = UNetBlock3D(in_channels=cin, out_channels=cout, attention=attn, **block_kwargs)
+            if decoder_type == 'skip' or level == 0:
+                if decoder_type == 'skip' and level < len(channel_mult) - 1:
+                    self.dec[f'{res}x{res}x{res}_aux_up'] = Conv3d(in_channels=out_channels, out_channels=out_channels, kernel=0, up=True, resample_filter=resample_filter)
+                self.dec[f'{res}x{res}x{res}_aux_norm'] = GroupNorm(num_channels=cout, eps=1e-6)
+                self.dec[f'{res}x{res}x{res}_aux_conv'] = Conv3d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)      
+ 
+    def forward(self, x, noise_labels, condition , class_labels=None, augment_labels=None):
+        if condition is not None:
+            # 直接拼接condition和输入
+            x_combined = torch.cat([x, condition], dim=1)
+            # 通过mixer网络处理组合特征
+            x = self.condition_mixer(x_combined)
+        #pdb.set_trace()
+        # Mapping.
+        #pdb.set_trace()
+        emb = self.map_noise(noise_labels) # time embedding 
+        emb = emb.reshape(emb.shape[0], 2, -1).flip(1).reshape(*emb.shape) # swap sin/cos
+        if self.map_label is not None:
+            tmp = class_labels
+            if self.training and self.label_dropout:
+                tmp = tmp * (torch.rand([x.shape[0], 1], device=x.device) >= self.label_dropout).to(tmp.dtype)
+            emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
+        if self.map_augment is not None and augment_labels is not None:
+            emb = emb + self.map_augment(augment_labels)
+        #pdb.set_trace()
+        emb = silu(self.map_layer0(emb)) # 1 256 
+        emb = silu(self.map_layer1(emb)) # 1 512   # t embedding     
+        #pdb.set_trace()
+
+        #pdb.set_trace()
+        # Encoder.
+        skips = []
+        aux = x
+        #pdb.set_trace()
+        for name, block in self.enc.items():
+            #print(" name :" , name)
+            if 'aux_down' in name:
+                aux = block(aux)
+            elif 'aux_skip' in name:
+                x = skips[-1] = x + block(aux)
+            elif 'aux_residual' in name:
+                x = skips[-1] = aux = (x + block(aux)) / np.sqrt(2)
+            else:
+                #pdb.set_trace()
+                #print( 'input blocks before : ' , x.shape)
+                x = block(x, emb) if isinstance(block, UNetBlock3D) else block(x)
+                #print( 'input blocks after : ' ,  x.shape)
+                skips.append(x)
+        #pdb.set_trace()
+        # Decoder.
+        aux = None
+        tmp = None
+        for name, block in self.dec.items():
+            #print(" name  " , name)
+            if 'aux_up' in name:
+                aux = block(aux)
+            elif 'aux_norm' in name:
+                tmp = block(x)
+            elif 'aux_conv' in name:
+                tmp = block(silu(tmp))
+                aux = tmp if aux is None else tmp + aux
+            else:
+                if x.shape[1] != block.in_channels:
+                    x = torch.cat([x, skips.pop()], dim=1)
+                x = block(x, emb)
+        #print("last output " , x.shape)
+        #pdb.set_trace()
+        return aux
+
+
+
+
+
+
+
+
 
 
 

@@ -43,6 +43,7 @@ class BaseTrainingConfig:
         'img_resolution':128,
         'in_channels': 4, 
         'out_channels': 1, # 1 + 3 
+        'condition_mixer_out_channels': 64,
         'implict_condition_dim' : 128,
         #image_enocer_setting
         'image_encoder_output': 64,
