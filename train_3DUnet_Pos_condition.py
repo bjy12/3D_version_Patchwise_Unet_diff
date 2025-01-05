@@ -546,9 +546,6 @@ def main():
                         else:
                             tracker = accelerator.get_tracker("tensorboard")
 
-
-
-
                 if epoch % cfg.save_model_epochs == 0 or epoch == cfg.num_epochs - 1:
                     # save the model
                     unet = accelerator.unwrap_model(model)
@@ -566,14 +563,6 @@ def main():
 
                     if cfg.use_ema:
                         ema_model.restore(unet.parameters())
-
-                    # if cfg.push_to_hub:
-                    #     upload_folder(
-                    #         repo_id=repo_id,
-                    #         folder_path=cfg.output_dir,
-                    #         commit_message=f"Epoch {epoch}",
-                    #         ignore_patterns=["step_*", "epoch_*"],
-                    #     )
 
     accelerator.end_training()
 
