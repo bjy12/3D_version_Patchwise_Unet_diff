@@ -24,7 +24,7 @@ from model.Song3DUnet import Song_Unet3D
 import diffusers
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 
-from patch_wise_generation import PosBaseDDPMPipeline
+from patch_wise_generation import TrainingInferencePipeline
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
@@ -392,7 +392,7 @@ def main():
                 patch_size = patch_size
                 #batch_mul = batch_mul_dict[patch_size]
             #batch_mul = batch_mul_dict[patch_size] // batch_mul_dict[img_resolution]
-            pdb.set_trace()
+            #pdb.set_trace()
             projs = batch['projs'].to(weight_dtype)
             clean_images = batch['gt_idensity'].to(weight_dtype)
             angles = batch['angles']
@@ -426,7 +426,6 @@ def main():
                 model_output = model(noisy_images, timesteps , projs , projs_points_tensor)
                 if cfg.prediction_type == "epsilon":
                     # this could have different weights!
-                    #loss = F.mse_loss(model_output.float(), noise.float())
                     loss = F.mse_loss(model_output.float(), noise.float())
                 elif cfg.prediction_type == "sample":
                     alpha_t = _extract_into_tensor(
@@ -511,26 +510,25 @@ def main():
                         ema_model.store(net.parameters())
                         ema_model.copy_to(net.parameters())
                     #pdb.set_trace()
-                    pipeline = PosBaseDDPMPipeline(
+                    pipeline = TrainingInferencePipeline(
                         net=net,
                         scheduler=noise_scheduler,
                     )
                     pipeline.set_device(device)
                     generator = torch.Generator(
                         device=device).manual_seed(0)
+                    save_dir = os.path.join(vis_dir, f'epoch_{epoch}_step_{global_step}')
                     # run pipeline in inference (sample random noise and denoise)
-                    sample_pred = pipeline(
-                        sample_type="patch",
-                        generator=generator,
-                        batch_size=cfg.valid_batch_size,
-                        num_inference_steps=cfg.ddpm_num_inference_steps,
-                        img_resolution= cfg.img_resolution,
-                        patch_size = cfg.patch_size,
-                        start_pos = cfg.start_pos
-
-                    )
-                    image_pred = sample_pred['image']
-                    save_pred_to_local(images=image_pred , save_path = vis_dir,global_steps = global_step)
+                    results = pipeline(
+                            noisy_images=noisy_idensity,        # 从训练循环中获取
+                            patch_pos_tensor=patch_pos_tensor,  # 从训练循环中获取
+                            projs=projs,                        # 从训练循环中获取
+                            projs_points_tensor=projs_points_tensor,  # 从训练循环中获取
+                            patch_image_tensor=patch_image_tensor,    # 从训练循环中获取
+                            generator=generator,
+                            num_inference_steps=cfg.ddpm_num_inference_steps,
+                            save_path=save_dir
+                        )
                     if cfg.use_ema:
                         ema_model.restore(net.parameters())
 
@@ -540,15 +538,15 @@ def main():
                         if is_accelerate_version(">=", "0.17.0.dev0"):
                             tracker = accelerator.get_tracker(
                                 "tensorboard", unwrap=True)
+                            middle_slice = results.pred_samples.shape[2] // 2
+                            pred_slice = results.pred_samples[:, :, middle_slice, :, :]
+                            gt_slice = results.gt_samples[:, :, middle_slice, :, :]
+                            tracker.add_images(f"train_inference/pred", pred_slice, global_step)
+                            tracker.add_images(f"train_inference/gt", gt_slice, global_step)
                         else:
                             tracker = accelerator.get_tracker("tensorboard")
-                        middle_slice = image_pred.shape[2] // 2
-                        images_2d = image_pred[:, :, middle_slice, :, :]  # [B, 1, H, W]
-                        
-                        # 归一化到[0, 255]范围
-                        images_processed = (images_2d * 255).round().astype("uint8")
-                        tracker.add_images(
-                            "sample_middle_slice", images_processed , epoch)
+
+
 
 
                 if epoch % cfg.save_model_epochs == 0 or epoch == cfg.num_epochs - 1:
@@ -559,7 +557,7 @@ def main():
                         ema_model.store(unet.parameters())
                         ema_model.copy_to(unet.parameters())
 
-                    pipeline = CustomDDPMPipeline(
+                    pipeline = TrainingInferencePipeline(
                         net=net,
                         scheduler=noise_scheduler,
                     )

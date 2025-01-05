@@ -220,6 +220,9 @@ def extract3DPatch(images, patch_size, positions=None, padding=None):
     y_pos = y.unsqueeze(0).repeat(batch_size, 1, 1, 1) + i.view(-1, 1, 1, 1)
     z_pos = z.unsqueeze(0).repeat(batch_size, 1, 1, 1) + k.view(-1, 1, 1, 1)
     
+
+    de_norm_volumes_pos = torch.stack((x_pos, y_pos, z_pos), dim=1)
+
     # Normalize positions to [0,1]
     x_pos = (x_pos / (resolution_w - 1))
     y_pos = (y_pos / (resolution_h - 1))
@@ -228,7 +231,7 @@ def extract3DPatch(images, patch_size, positions=None, padding=None):
     # Combine position encodings
     volumes_pos = torch.stack((x_pos, y_pos, z_pos), dim=1)
     
-    return padded, volumes_pos
+    return padded, volumes_pos ,de_norm_volumes_pos
 
 
 def init_projector(geo_cfg ):
@@ -243,7 +246,7 @@ def project_points(points , angles , projector):
     points_proj = []
     for a in angles:
         #pdb.set_trace()
-        p = projector.project(points , a)
+        p , _ = projector.project(points , a)
         #pdb.set_trace()
         points_proj.append(p)
     #pdb.set_trace()
@@ -255,11 +258,11 @@ def pachify3d_projected_points(clean_image , patch_size , angles , projector , p
     #pdb.set_trace()
     device = clean_image.device
     #patch_image , patch_pos = pachify3D(clean_image , patch_size)
-    patch_image , patch_pos  = extract3DPatch(images=clean_image , patch_size=patch_size, positions=patch_pos, padding=None )
-    pdb.set_trace()
+    patch_image , patch_pos, _  = extract3DPatch(images=clean_image , patch_size=patch_size, positions=patch_pos, padding=None )
+    #pdb.set_trace()
     patch_image_np = patch_image.cpu().numpy()
     patch_pos_np = patch_pos.cpu().numpy() 
-    pdb.set_trace()
+    #pdb.set_trace()
     #sitk_save('patch_1.nii.gz',patch_image_np[0,0,...] ,uint8=True)
     # sitk_save('patch_2.nii.gz',patch_image_np[1,0,...], uint8=True)
     # sitk_save('patch_3.nii.gz',patch_image_np[2,0,...], uint8=True)
@@ -284,6 +287,7 @@ def pachify3d_projected_points(clean_image , patch_size , angles , projector , p
         #pdb.set_trace()
         projs_points_batch.append(points_projeted_)
         #pdb.set_trace()
+    #pdb.set_trace()
     projs_points_batch = np.stack(projs_points_batch , axis=0)
     #pdb.set_trace()
 

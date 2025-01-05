@@ -41,6 +41,6 @@ class Geometry(object):
         d_points /= (self.p_res * self.p_spacing)
         d_points *= 2 # NOTE: some points may fall outside [-1, 1]
         
-        #d_poitns_denorm = ((d_points + 1) / 2) * (self.p_res)
+        d_poitns_denorm = ((d_points + 1) / 2) * (self.p_res)
         #pdb.set_trace()
-        return d_points
+        return d_points , d_poitns_denorm

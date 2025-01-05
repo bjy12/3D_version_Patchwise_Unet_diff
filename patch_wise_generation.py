@@ -22,6 +22,124 @@ import matplotlib.pyplot as plt
 import yaml
 from datetime import datetime
 from einops import rearrange
+
+@dataclass
+class TrainingInferenceOutput(BaseOutput):
+    """Output class for training inference results."""
+    pred_samples: np.ndarray
+    gt_samples: np.ndarray
+
+
+
+
+class TrainingInferencePipeline(DiffusionPipeline):
+    """Pipeline for inference during training, using pre-processed data."""
+    model_cpu_offload_seq = "net"
+
+    def __init__(self, net, scheduler):
+        super().__init__()
+        self.register_modules(net=net, scheduler=scheduler)
+        self._device = None
+
+    @property
+    def device(self):
+        if self._device is None:
+            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return self._device
+
+    def set_device(self, device):
+        self._device = device
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        noisy_images,          # 已处理的噪声图像
+        patch_pos_tensor,      # 位置信息
+        projs,                 # 投影数据
+        projs_points_tensor,   # 投影点信息
+        patch_image_tensor,    # 原始patch图像（用于ground truth）
+        generator=None,
+        num_inference_steps=1000,
+        output_type="npy",
+        return_dict=True,
+        save_path=None,
+    ):
+        """
+        执行推理过程，使用已经预处理好的数据。
+
+        Args:
+            noisy_images: 已添加噪声的图像
+            patch_pos_tensor: patch位置信息
+            projs: 投影数据
+            projs_points_tensor: 投影点信息
+            patch_image_tensor: 原始patch图像
+            generator: 随机数生成器
+            num_inference_steps: 推理步数
+            output_type: 输出类型
+            return_dict: 是否返回字典格式
+            save_path: 保存路径
+        """
+        # 设置时间步
+        self.scheduler.set_timesteps(num_inference_steps)
+        
+        # 初始化当前图像（使用已处理的噪声图像和位置信息）
+        current_image = torch.cat([noisy_images, patch_pos_tensor], dim=1)
+
+        # 去噪循环
+        for step_idx , t in enumerate(self.progress_bar(self.scheduler.timesteps)):
+            # 扩展时间步到batch大小
+            timesteps = t.expand(current_image.shape[0]).to(self.device)
+
+            # 模型预测
+            model_output = self.net(current_image, timesteps, projs, projs_points_tensor)
+
+            # 分离位置信息和噪声部分
+            pos = current_image[:, 1:4, ...]
+            noise_part = current_image[:, :1, ...]
+
+            # 调度器步骤
+            noise_pred = self.scheduler.step(
+                model_output, t, noise_part, generator=generator
+            )
+            
+            # 更新当前图像
+            current_image = torch.cat([noise_pred.prev_sample, pos], dim=1)
+
+        # 处理最终预测结果
+        final_pred = noise_pred.pred_original_sample
+        final_pred = (final_pred + 1) / 2
+        final_pred = final_pred.clamp(0, 1).cpu().numpy()
+
+        # 获取ground truth
+        gt_image = patch_image_tensor.cpu().numpy()
+
+        # 保存结果（如果指定了保存路径）
+        if save_path is not None:
+            os.makedirs(save_path, exist_ok=True)
+            sitk_save(os.path.join(save_path, 'pred.nii.gz'), final_pred, uint8=True)
+            sitk_save(os.path.join(save_path, 'gt.nii.gz'), gt_image, uint8=True)
+
+        if not return_dict:
+            return final_pred, gt_image
+
+        return TrainingInferenceOutput(
+            pred_samples=final_pred,
+            gt_samples=gt_image
+        )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 @dataclass
 class MyCustom3DOutput(BaseOutput):
     """
@@ -63,46 +181,79 @@ class ProjectedBaseDDPMPipline(DiffusionPipeline):
             self.projector = Geometry(dst_cfg['projector'])    
 
     def sample_patch_wise(self , batch_step , projs , clean_images , angles , generator,patch_size,save_intermediate_dir,save_step_interval):
-        patch_image_tensor , patch_pos_tensor , projs_points_tensor =  pachify3d_projected_points(clean_images , patch_size , angles , self.projector)
-
+        print(f"\n=== Starting sample_patch_wise ===")
+        print(f"Input clean_images shape: {clean_images.shape}, dtype: {clean_images.dtype}")
+        print(f"Input projs shape: {projs.shape}, dtype: {projs.dtype}")
+        start_pos = (128 - 64) // 2 
+        positions = {
+            'i': start_pos ,
+            'j': start_pos ,
+            'k': start_pos ,
+        } 
+        #pdb.set_trace()
+        print(f"Starting positions: {positions}")
+        patch_image_tensor , patch_pos_tensor , projs_points_tensor =  pachify3d_projected_points(clean_images , patch_size , angles , self.projector , patch_pos=positions)
+        pdb.set_trace()
+        print(f"\nAfter pachify3d:")
+        print(f"patch_image_tensor - shape: {patch_image_tensor.shape}, range: [{patch_image_tensor.min():.3f}, {patch_image_tensor.max():.3f}]")
+        print(f"patch_pos_tensor - shape: {patch_pos_tensor.shape}, range: [{patch_pos_tensor.min():.3f}, {patch_pos_tensor.max():.3f}]")
+        print(f"projs_points_tensor - shape: {projs_points_tensor.shape}, range: [{projs_points_tensor.min():.3f}, {projs_points_tensor.max():.3f}]")
         projs_points_tensor = projs_points_tensor.to(self.weight_dtype)
         b , c , h , w, d  = patch_image_tensor.shape
         image_shape = ( b , c ,h , w, d )
         image = randn_tensor(image_shape , generator=generator , device=self.device)
-        
+        print(f"\nInitial noise image - shape: {image.shape}, range: [{image.min():.3f}, {image.max():.3f}]")
         current_image = torch.concat([image, patch_pos_tensor] , dim=1)
-
+        print(f"Initial current_image - shape: {current_image.shape}, range: [{current_image.min():.3f}, {current_image.max():.3f}]")
+        pdb.set_trace()
         for step_idx , t in enumerate(self.progress_bar(self.scheduler.timesteps)):
 
             t_ = t
             t = t.expand(current_image.shape[0]).to(self.device)
-
+            #pdb.set_trace()
             model_output = self.net(current_image, t , projs , projs_points_tensor)
 
             pos = current_image[:,1:4,...]
             noise_part = current_image[:,:1,...]
 
             updated_noise  = self.scheduler.step(model_output, t_, noise_part, return_dict=True , generator=generator)
-
-
-            current_image = torch.cat([updated_noise.prev_sample , pos], dim=1)
-            
+            #pdb.set_trace()
+                    
             if save_intermediate_dir is not None and step_idx % save_step_interval == 0:
                 pred_x0 = updated_noise.pred_original_sample
                 # 转换到[0,1]范围
-                intermediate_image = (pred_x0 / 2 + 0.5).clamp(0, 1)
-                intermediate_image = intermediate_image.cpu().numpy()
+                #intermediate_image = (pred_x0 / 2 + 0.5).clamp(0, 1)
+                #intermediate_image = intermediate_image.cpu().numpy()
+
+                intermediate_image = (pred_x0 + 1) / 2 
+                intermediate_image = intermediate_image.clamp(0,1).cpu().numpy()
+            
                 # 为每个batch样本保存一个文件
                 save_path = os.path.join(
                         save_intermediate_dir, 
                         f'step_{step_idx:04d}_sample_{batch_step}.nii.gz')
                 sitk_save(save_path, intermediate_image, uint8=True)
+            current_image = torch.cat([updated_noise.prev_sample , pos], dim=1)
+
 
         pdb.set_trace()
-        current_image = (current_image / 2 + 0.5 ).clamp(0,1)
-        current_image = current_image[:,:1,...].cpu().numpy()
+        print("\n=== Final Processing ===")
+        # current_image = (current_image / 2 + 0.5 ).clamp(0,1)
+        # print(f"After normalization - shape: {current_image.shape}, range: [{current_image.min():.3f}, {current_image.max():.3f}]")
+        # current_image = current_image[:,:1,...].cpu().numpy()
+        # print(f"Final output - shape: {current_image.shape}, range: [{current_image.min():.3f}, {current_image.max():.3f}]")
+        pdb.set_trace()
+        final_pred = updated_noise.pred_original_sample
+        final_pred = (final_pred + 1) / 2
+        final_pred = final_pred.clamp(0, 1).cpu().numpy()
         gt_image  = patch_image_tensor.cpu().numpy() 
-        return MyCustom3DOutput(image = current_image)  , gt_image
+        print(f"GT image - shape: {gt_image.shape}, range: [{gt_image.min():.3f}, {gt_image.max():.3f}]")
+        # 添加额外的验证检查
+        if np.isnan(final_pred).any():
+            print("WARNING: NaN values detected in output!")
+        if np.isinf(final_pred).any():
+            print("WARNING: Inf values detected in output!")
+        return MyCustom3DOutput(image = final_pred)  , gt_image
     def sample_full_volume(self, batch_step , block_size , projs , clean_images , angles , generator, save_intermediate_dir, save_step_interval):  
         pdb.set_trace()
         image_blocks , pos_blocks , proj_points_tensor , blocks_info= full_volume_inference_process(clean_images , patch_size= 128 , block_size=16 , angles=angles , projector=self.projector)
@@ -303,8 +454,8 @@ class PosBaseDDPMPipeline(DiffusionPipeline):
 
 
 def projected_condition_process():
-    model_config = './logging_dir/checkpoint-55000/unet/config.json'
-    safetensors_path = './logging_dir/checkpoint-55000/unet/diffusion_pytorch_model.safetensors'
+    model_config = 'F:/Code_Space/diffusers_v2/serv_ck_norm_size_0/checkpoint-154000/unet/config.json'
+    safetensors_path = 'F:/Code_Space/diffusers_v2/serv_ck_norm_size_0/checkpoint-154000/unet/diffusion_pytorch_model.safetensors'
     infernect_time_steps = 1000
     save_path = './projected_condition/'
     save_sample = os.path.join(save_path, 'sample')
@@ -338,7 +489,7 @@ def projected_condition_process():
     for step , batch in enumerate(train_dataloader):
         pdb.set_trace()
         # sample type "patch" and "full_volume"
-        results , gt_image = pipline(batch ,step , num_inference_steps=infernect_time_steps , generator=generator , patch_size=32 ,sample_type='patch' ,save_intermediate_dir=save_intermediate_dir , save_step_interval=100)
+        results , gt_image = pipline(batch ,step , num_inference_steps=infernect_time_steps , generator=generator , patch_size=64 ,sample_type='patch' ,save_intermediate_dir=save_intermediate_dir , save_step_interval=100)
         #results = images['image']
         pdb.set_trace()
         sitk_save(save_sample + f'/{step}.nii.gz' , results , uint8=True)
