@@ -392,7 +392,7 @@ def main():
                 patch_size = patch_size
                 #batch_mul = batch_mul_dict[patch_size]
             #batch_mul = batch_mul_dict[patch_size] // batch_mul_dict[img_resolution]
-            pdb.set_trace()
+            #pdb.set_trace()
             projs = batch['projs'].to(weight_dtype)
             clean_images = batch['gt_idensity'].to(weight_dtype)
             angles = batch['angles']
@@ -549,7 +549,7 @@ def main():
                 if epoch % cfg.save_model_epochs == 0 or epoch == cfg.num_epochs - 1:
                     # save the model
                     unet = accelerator.unwrap_model(model)
-                    pdb.set_trace()
+                    #pdb.set_trace()
                     if cfg.use_ema:
                         ema_model.store(unet.parameters())
                         ema_model.copy_to(unet.parameters())

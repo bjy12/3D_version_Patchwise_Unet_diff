@@ -132,7 +132,7 @@ class Implict_Fuc_Network(nn.Module):
         for i in range(len(self.layers)):
             # 在跳跃连接层，将原始输入特征拼接到当前特征
             if i in self.skips:
-                pdb.set_trace()
+                #pdb.set_trace()
                 x = torch.cat([input_features, x], dim=-1)
             
             linear = self.layers[i]

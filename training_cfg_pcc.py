@@ -26,7 +26,7 @@ class BaseTrainingConfig:
     ddpm_num_steps: int = 1000
     ddpm_beta_schedule: str = 'linear'
     prediction_type: str = 'epsilon'
-    ddpm_num_inference_steps: int = 100
+    ddpm_num_inference_steps: int = 500
 
     #unet_setting 
     unet_config: Dict = field(default_factory=lambda:{

@@ -460,7 +460,7 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         #pdb.set_trace()
         coords_global = coords_global.permute(0,2,1)
         pos_embed = self.pos_implic(coords_global)
-        pdb.set_trace()
+        #pdb.set_trace()
         points_feats = points_feats.permute(0,2,1)
 
         p_condition = self.implict_fn(pos_embed , points_feats)
@@ -469,10 +469,6 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         p_condition = p_condition.reshape(b, -1, v_w, v_h ,v_d)
 
         return p_condition
-
-
-
-
 
 
     def forward_points(self, proj_feats , projs_points):
