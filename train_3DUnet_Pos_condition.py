@@ -360,7 +360,7 @@ def main():
     else:
         patch_size = cfg.pachify_size
     # patch pos 
-    start_pos = (128 - 64) // 2 
+    start_pos = (128 - patch_size) // 2 
     positions = {
         'i': start_pos ,
         'j': start_pos ,
@@ -392,7 +392,7 @@ def main():
                 patch_size = patch_size
                 #batch_mul = batch_mul_dict[patch_size]
             #batch_mul = batch_mul_dict[patch_size] // batch_mul_dict[img_resolution]
-            #pdb.set_trace()
+            pdb.set_trace()
             projs = batch['projs'].to(weight_dtype)
             clean_images = batch['gt_idensity'].to(weight_dtype)
             angles = batch['angles']

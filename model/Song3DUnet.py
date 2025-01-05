@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.functional as F
 from torch.nn.functional import silu
 from model.image_encoder.u_net import UNet
-from model.implict_function import get_embedder ,DummyNeRF
+from model.implict_function import get_embedder ,DummyNeRF , Implict_Fuc_Network
 import pdb
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers import ModelMixin
@@ -384,17 +384,38 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
         resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
         implicit_mlp        = False,        # enable implicit coordinate encoding
-        image_encoder       = {}
+        implict_condition_dim = 128 ,       # implict condition input dim 
+        #image_encoder setting 
+        image_encoder_output  = 64 , 
+        bilinear = False,
+        #implict_func_model setting 
+        pos_dim = 63 ,
+        local_f_dim = 64 , 
+        num_layer = 4 ,
+        hidden_dim = 256 ,
+        output_dim = 128 ,
+        skips = [2] ,
+        last_activation = 'relu',
+        use_silu = False , 
+        no_activation = False,         
     ):
         super(Song_Unet3D , self).__init__()
 
-        self.image_feature_extractor = UNet(n_channels=1 , n_classes=64 , bilinear=False)
+        self.image_feature_extractor = UNet(n_channels=1 , n_classes=image_encoder_output , bilinear=bilinear)
         self.combine = 'mlp'
         self.view_mixer = MLP([2, 2 // 2, 1])
 
         self.pos_implic , _  = get_embedder(multires=10 , i=0)
 
-        self.implict_fn = DummyNeRF(input_ch=127 , output_ch=128)
+        #self.implict_fn = DummyNeRF(input_ch=127 , output_ch=128)
+
+        self.implict_fn = Implict_Fuc_Network(pos_dim=pos_dim ,local_f_dim=local_f_dim , num_layer=num_layer , 
+                                              hidden_dim=hidden_dim , output_dim=output_dim , skips=skips ,
+                                              last_activation=last_activation , use_silu=use_silu , 
+                                              no_activation=no_activation)
+        
+
+
         self.model = SongUNet3D(
             img_resolution = img_resolution,
             in_channels = in_channels,
@@ -412,7 +433,8 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
             encoder_type = encoder_type,
             decoder_type = decoder_type,
             resample_filter = resample_filter,
-            implicit_mlp = implicit_mlp
+            implicit_mlp = implicit_mlp,
+            implict_condition_dim= implict_condition_dim
         )      
 
 
@@ -430,13 +452,14 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
             proj_feats[i] = proj_feats[i].reshape(b, m, c_, w_, h_) # B, M, C, W, H
         
         #pdb.set_trace()
-
+   
         points_feats = self.forward_points(proj_feats , projs_points)
         #pdb.set_trace()
         coords_global = coords_global.permute(0,2,1)
         pos_embed = self.pos_implic(coords_global)
-        #pdb.set_trace()
+        pdb.set_trace()
         points_feats = points_feats.permute(0,2,1)
+
         p_condition = self.implict_fn(pos_embed , points_feats)
         p_condition = p_condition.permute(0,2,1)
         #pdb.set_trace()
@@ -511,6 +534,7 @@ class SongUNet3D(torch.nn.Module):
         decoder_type        = 'standard',   
         resample_filter     = [1,1],      # 扩展到3D的重采样滤波器
         implicit_mlp        = False,
+        implict_condition_dim = 128,
     ):
         super(SongUNet3D, self).__init__()
         assert embedding_type in ['fourier', 'positional']
@@ -538,33 +562,13 @@ class SongUNet3D(torch.nn.Module):
         self.map_layer1 = Linear(in_features=emb_channels, out_features=emb_channels, **init)
 
         # 添加condition处理层
-        self.implict_dim = 192
+        self.implict_dim = implict_condition_dim
         self.condition_processor = nn.Sequential(
             Conv3d(in_channels=self.implict_dim, out_channels=self.implict_dim//2, kernel=1, **init),
             nn.SiLU(),
             Conv3d(in_channels=self.implict_dim//2, out_channels=60, kernel=1, **init),
             nn.SiLU()
         )
-
-
-
-        #! to do 
-        # New: Condition processing layers for different scales
-        # self.condition_blocks = torch.nn.ModuleDict()
-        # pdb.set_trace()
-        # curr_channels = model_channels
-        # for level, mult in enumerate(channel_mult):
-        #     out_channels = model_channels * mult
-        #     if level > 0:  # Skip the first level as it matches input condition
-        #         self.condition_blocks[f'level_{level}'] = Conv3d(
-        #             in_channels=curr_channels,
-        #             out_channels=out_channels,
-        #             kernel=3,
-        #             down=True,
-        #             resample_filter=resample_filter,
-        #             **init
-        #         )
-        #     curr_channels = out_channels
 
         # Modified mapping layers to include condition
     
@@ -628,19 +632,7 @@ class SongUNet3D(torch.nn.Module):
                     self.dec[f'{res}x{res}x{res}_aux_up'] = Conv3d(in_channels=out_channels, out_channels=out_channels, kernel=0, up=True, resample_filter=resample_filter)
                 self.dec[f'{res}x{res}x{res}_aux_norm'] = GroupNorm(num_channels=cout, eps=1e-6)
                 self.dec[f'{res}x{res}x{res}_aux_conv'] = Conv3d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)      
-
-    # def process_condition(self, condition):
-    #     """Generate multi-scale conditions"""
-    #     conditions = {}
-    #     curr_condition = condition
-    #     conditions['level_0'] = curr_condition
-    #     pdb.set_trace()
-    #     for level in range(1, len(self.condition_blocks) + 1):
-    #         curr_condition = self.condition_blocks[f'level_{level}'](curr_condition)
-    #         conditions[f'level_{level}'] = curr_condition
-
-    #     return conditions   
-
+ 
     def forward(self, x, noise_labels, condition , class_labels=None, augment_labels=None):
 
         # Mapping.
@@ -654,10 +646,12 @@ class SongUNet3D(torch.nn.Module):
             emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
         if self.map_augment is not None and augment_labels is not None:
             emb = emb + self.map_augment(augment_labels)
+        pdb.set_trace()
         emb = silu(self.map_layer0(emb)) # 1 256 
         emb = silu(self.map_layer1(emb)) # 1 512   # t embedding     
         #pdb.set_trace()
         if condition is not None:
+            pdb.set_trace()
             process_condition = self.condition_processor(condition)
 
             x = torch.cat([x, process_condition] , dim=1)

@@ -43,6 +43,20 @@ class BaseTrainingConfig:
         'img_resolution':128,
         'in_channels': 4, 
         'out_channels': 1, # 1 + 3 
+        'implict_condition_dim' : 128,
+        #image_enocer_setting
+        'image_encoder_output': 64,
+        'bilinear': False,
+        #implict_func_model setting 
+        'pos_dim': 63 ,
+        'local_f_dim':64 , 
+        'num_layer': 4 ,
+        'hidden_dim': 256 ,
+        'output_dim': 128 ,
+        'skips': [2] ,
+        'last_activation': 'relu',
+        'use_silu':False , 
+        'no_activation':False, 
     })  
 
     # Training
