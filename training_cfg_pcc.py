@@ -52,12 +52,18 @@ class BaseTrainingConfig:
         'pos_dim': 63 ,
         'local_f_dim':64 , 
         'num_layer': 4 ,
-        'hidden_dim': 256 ,
-        'output_dim': 128 ,
+        'hidden_dim': 128 ,
+        'output_dim': 64 ,
         'skips': [2] ,
         'last_activation': 'relu',
         'use_silu':False , 
         'no_activation':False, 
+        #spatial_guidede_cluster setting
+        'proposal_d':2,
+        'proposal_h':2,
+        'proposal_w':2,
+        'heads':4,     #   
+        'head_dim':16  #  heads * head_dim 
     })  
 
     # Training
@@ -73,7 +79,8 @@ class BaseTrainingConfig:
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = '/root/share/processed_128x128_s2'
+    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2'
+    #image_root: str = '/root/share/processed_128x128_s2'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
     files_list_path: str = './files_name/pelvic_coord_train_16.txt'
     geo_cfg_path: str = './geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'

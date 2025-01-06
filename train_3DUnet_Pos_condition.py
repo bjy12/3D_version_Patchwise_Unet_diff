@@ -20,7 +20,8 @@ from packaging import version
 #from torchvision import transforms
 from tqdm.auto import tqdm
 from omegaconf import OmegaConf
-from model.Song3DUnet import Song_Unet3D
+#from model.Song3DUnet import Song_Unet3D
+from model.Song3DUnetV3 import Song_Unet3D
 import diffusers
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 
