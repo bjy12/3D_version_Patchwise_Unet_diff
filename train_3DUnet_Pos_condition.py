@@ -543,11 +543,22 @@ def main():
                             gt_slice = results.gt_samples[:, :, middle_slice, :, :]
                             tracker.add_images(f"train_inference/pred", pred_slice, global_step)
                             tracker.add_images(f"train_inference/gt", gt_slice, global_step)
+
+                            # record psnr ssim metrics
+                            tracker.add_scalar("metrics/psnr", results.metrics_log['psnr'], global_step)
+                            tracker.add_scalar("metrics/ssim", results.metrics_log['ssim'], global_step)
                         else:
                             tracker = accelerator.get_tracker("tensorboard")
 
-                if epoch % cfg.save_model_epochs == 0 or epoch == cfg.num_epochs - 1:
+                if epoch % cfg.valid_epochs == 0 or epoch == cfg.num_epochs - 1:
                     # save the model
+                    last_eval_dir = os.path.join(logging_dir , 'last_eval')
+
+                    if os.path.exists(last_eval_dir):
+                        shutil.rmtree(last_eval_dir)
+
+                    os.makedirs(last_eval_dir)
+
                     unet = accelerator.unwrap_model(model)
                     #pdb.set_trace()
                     if cfg.use_ema:
@@ -558,11 +569,13 @@ def main():
                         net=net,
                         scheduler=noise_scheduler,
                     )
-
-                    pipeline.save_pretrained(cfg.output_dir)
+                    pipeline.save_pretrained(last_eval_dir)
 
                     if cfg.use_ema:
                         ema_model.restore(unet.parameters())
+
+                    logger.info(f"Saved latest model to {last_eval_dir}") 
+
 
     accelerator.end_training()
 

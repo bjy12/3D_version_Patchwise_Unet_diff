@@ -4,7 +4,7 @@ import os
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from diffusers.utils import BaseOutput
 from diffusers.utils.torch_utils import randn_tensor
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union ,Dict
 from dataclasses import dataclass
 import numpy as np
 import pickle
@@ -14,20 +14,18 @@ from diffusers import DDPMPipeline, DDPMScheduler
 import pdb
 import SimpleITK as sitk
 from datasets.geometry import Geometry
-
-from datasets.datautils3d import load_with_coord , load_diffusion_condition
+from datasets.datautils3d import  load_diffusion_condition
 from datasets.slicedataset import load_slice_dataset
 from pachify_and_projector import pachify3d_projected_points , full_volume_inference_process
 import matplotlib.pyplot as plt
 import yaml
-from datetime import datetime
-from einops import rearrange
-
+from metrics import calculate_metrics
 @dataclass
 class TrainingInferenceOutput(BaseOutput):
     """Output class for training inference results."""
     pred_samples: np.ndarray
     gt_samples: np.ndarray
+    metrics_log: Dict[str, float]
 
 
 
@@ -107,13 +105,17 @@ class TrainingInferencePipeline(DiffusionPipeline):
 
         # 处理最终预测结果
         final_pred = noise_pred.pred_original_sample
-        final_pred = (final_pred + 1) / 2
+        final_pred = (final_pred + 1. ) / 2.
         final_pred = final_pred.clamp(0, 1).cpu().numpy()
 
         # 获取ground truth
-        gt_image = patch_image_tensor.cpu().numpy()
+        patch_image_tensor = ( patch_image_tensor + 1. ) / 2.
+        gt_image = patch_image_tensor.clamp(0,1).cpu().numpy()
 
-        # 保存结果（如果指定了保存路径）
+        metrics_dict = calculate_metrics(final_pred , gt_image , data_range=1.0)
+        print(f"\nQuality Metrics:")
+        print(f"PSNR: {metrics_dict['psnr']:.4f}")
+        print(f"SSIM: {metrics_dict['ssim']:.4f}")        # 保存结果（如果指定了保存路径）
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
             sitk_save(os.path.join(save_path, 'pred.nii.gz'), final_pred, uint8=True)
@@ -124,20 +126,9 @@ class TrainingInferencePipeline(DiffusionPipeline):
 
         return TrainingInferenceOutput(
             pred_samples=final_pred,
-            gt_samples=gt_image
+            gt_samples=gt_image,
+            metrics_log=metrics_dict,
         )
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 @dataclass

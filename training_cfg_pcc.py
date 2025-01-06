@@ -73,7 +73,7 @@ class BaseTrainingConfig:
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2/'
+    image_root: str = '/root/share/processed_128x128_s2'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
     files_list_path: str = './files_name/pelvic_coord_train_16.txt'
     geo_cfg_path: str = './geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'
@@ -83,15 +83,19 @@ class BaseTrainingConfig:
     pachify_size: int = 64
 
     # LR Scheduler
-    lr_scheduler: str = 'constant'
-    lr_warmup_steps: int = 500
+    # Lr Scheduler 1 
+    #lr_scheduler: str = 'constant'
+    #lr_warmup_steps: int = 500
+
+    lr_scheduler: str = 'cosine'
+    lr_warmup_steps: int = 1000
 
     # AdamW
     scale_lr = False
     learning_rate: float = 1e-4
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
-    adam_weight_decay: float = 1e-2
+    adam_weight_decay: float = 1e-4
     adam_epsilon: float = 1e-08
 
     # EMA

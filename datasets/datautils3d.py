@@ -61,60 +61,8 @@ def get_filesname_from_txt(txt_file_path):
 
     return files
 
-class Self_LearningData(Dataset):
-    def __init__(self, root_l ,transform=None):
-        super(Self_LearningData, self).__init__()
-        self.root_l = root_l
-        self.image_files_path = []
-        for file in os.listdir(self.root_l):
-            self.image_files_path.append(os.path.join(self.root_l , file))
-
-    def __len__(self):
-        return len(self.image_files_path)
-    
-    def __getitem__(self, index):
-        #pdb.set_trace()
-        image_path = self.image_files_path[index]
-        image_ ,  _  =  sitk_load(image_path)
-        
-        image_ = image_.astype(np.float32) / 255.
-        image_ = ( image_ * 2 ) - 1
-
-        image_t = image_.copy()
-        image_ = image_[np.newaxis, :]
-        image_ = torch.Tensor(image_)
-
-        image_t = image_t[np.newaxis, :]
-        image_t = torch.Tensor(image_t)
 
 
-        return image_ , image_t
-
-
-class Diffusion_Coords_IdensityData(Dataset):
-    def __init__(self, root_path):
-        super().__init__()
-        self.root_path  = root_path
-        files_name = os.listdir(self.root_path)
-        self.files_path = []
-        for file in files_name:
-            f_p = os.path.join(self.root_path , file)
-            self.files_path.append(f_p)
-
-        random.shuffle(self.files_path)
-
-    def __len__(self):
-        return len(self.files_path)
-    
-    def __getitem__(self, index):
-        npy_path = self.files_path[index]
-        coords_idensity = np.load(npy_path)
-        coords_idensity = torch.from_numpy(coords_idensity) #
-        #pdb.set_trace()
-        #print(" coords idensity : " , coords_idensity.shape )
-        coords_idensity = rearrange(coords_idensity , "h w d c -> c h w d ")
-
-        return coords_idensity
 
 class Self_LearningRandomBlockPoints_Dataset(Dataset):
     def __init__(self, root_path,file_list, path_dict  , block_size ,train_mode=True):
@@ -389,12 +337,11 @@ class Diffusion_Condition_Dataset(Dataset):
       
     def __getitem__(self, index):
         name = self.files_names[index]
-
-        gt_idensity = self.load_ct(name)
-
+        gt_idensity = self.load_ct(name)  # scale to [0,1]
+        #normalization [-1,1] follow diffusion input 
+        gt_idensity = (gt_idensity * 2) - 1 
         projs, angles = self.sample_projections(name ,n_view=2)
         #pdb.set_trace()
-
         ret_dict = {
             'name':name,
             'gt_idensity': gt_idensity,
@@ -407,26 +354,6 @@ class Diffusion_Condition_Dataset(Dataset):
 
 
 
-
-
-def loadSelf_learningData(root,batch_size , shuffle= True):
-    sl_ds = Self_LearningData(root)
-    #img_s , img_t = sl_ds[0]
-    #pdb.set_trace()
-    return DataLoader(sl_ds , batch_size=batch_size , shuffle=shuffle)
-
-
-def load_with_coord(img_root ,  coord_root , files_list_path):
-    files_name = get_filesname_from_txt(files_list_path)
-    sl_ds = Self_LearningWithCoordsData(img_root , coord_root , files_name)
-    #pdb.set_trace()
-    ##sl_ds[0]
-    return sl_ds
-
-def load_diffusion_coords_idensity(root_data):
-    dataset = Diffusion_Coords_IdensityData(root_data)
-    
-    return dataset
 
 
 def load_diffusion_random_blocks(root_data , files_list_path ):
