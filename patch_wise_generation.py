@@ -26,6 +26,7 @@ class TrainingInferenceOutput(BaseOutput):
     pred_samples: np.ndarray
     gt_samples: np.ndarray
     metrics_log: Dict[str, float]
+    names: Optional[List[str]] = None
 
 
 
@@ -56,6 +57,7 @@ class TrainingInferencePipeline(DiffusionPipeline):
         projs,                 # 投影数据
         projs_points_tensor,   # 投影点信息
         patch_image_tensor,    # 原始patch图像（用于ground truth）
+        names,
         generator=None,
         num_inference_steps=1000,
         output_type="npy",
@@ -116,10 +118,27 @@ class TrainingInferencePipeline(DiffusionPipeline):
         print(f"\nQuality Metrics:")
         print(f"PSNR: {metrics_dict['psnr']:.4f}")
         print(f"SSIM: {metrics_dict['ssim']:.4f}")        # 保存结果（如果指定了保存路径）
+        # 保存结果（如果指定了保存路径）
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
-            sitk_save(os.path.join(save_path, 'pred.nii.gz'), final_pred, uint8=True)
-            sitk_save(os.path.join(save_path, 'gt.nii.gz'), gt_image, uint8=True)
+            
+            # 如果提供了names，使用name保存每个样本
+            if names is not None:
+                for idx, name in enumerate(names):
+                    # 为每个样本创建子目录
+                    sample_dir = os.path.join(save_path, name)
+                    os.makedirs(sample_dir, exist_ok=True)
+                    
+                    # 保存预测结果和ground truth
+                    sitk_save(os.path.join(sample_dir, 'pred.nii.gz'), 
+                             final_pred[idx:idx+1], uint8=True)
+                    sitk_save(os.path.join(sample_dir, 'gt.nii.gz'), 
+                             gt_image[idx:idx+1], uint8=True)
+                    # 保存metrics到文本文件
+            else:
+                # 如果没有提供names，使用原来的保存方式
+                sitk_save(os.path.join(save_path, 'pred.nii.gz'), final_pred, uint8=True)
+                sitk_save(os.path.join(save_path, 'gt.nii.gz'), gt_image, uint8=True)
 
         if not return_dict:
             return final_pred, gt_image
@@ -128,6 +147,7 @@ class TrainingInferencePipeline(DiffusionPipeline):
             pred_samples=final_pred,
             gt_samples=gt_image,
             metrics_log=metrics_dict,
+            names = names
         )
 
 

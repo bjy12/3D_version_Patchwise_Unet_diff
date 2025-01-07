@@ -511,6 +511,7 @@ def main():
                         ema_model.store(net.parameters())
                         ema_model.copy_to(net.parameters())
                     #pdb.set_trace()
+
                     pipeline = TrainingInferencePipeline(
                         net=net,
                         scheduler=noise_scheduler,
@@ -520,6 +521,10 @@ def main():
                         device=device).manual_seed(0)
                     save_dir = os.path.join(vis_dir, f'epoch_{epoch}_step_{global_step}')
                     # run pipeline in inference (sample random noise and denoise)
+                    names = batch['name']
+
+
+
                     results = pipeline(
                             noisy_images=noisy_idensity,        # 从训练循环中获取
                             patch_pos_tensor=patch_pos_tensor,  # 从训练循环中获取
@@ -528,7 +533,8 @@ def main():
                             patch_image_tensor=patch_image_tensor,    # 从训练循环中获取
                             generator=generator,
                             num_inference_steps=cfg.ddpm_num_inference_steps,
-                            save_path=save_dir
+                            save_path=save_dir,
+                            names=names
                         )
                     if cfg.use_ema:
                         ema_model.restore(net.parameters())
@@ -542,14 +548,19 @@ def main():
                             middle_slice = results.pred_samples.shape[2] // 2
                             pred_slice = results.pred_samples[:, :, middle_slice, :, :]
                             gt_slice = results.gt_samples[:, :, middle_slice, :, :]
-                            tracker.add_images(f"train_inference/pred", pred_slice, global_step)
-                            tracker.add_images(f"train_inference/gt", gt_slice, global_step)
-
-                            # record psnr ssim metrics
+                        # 为每个样本添加带name的标签
+                            for idx, (pred, gt, name) in enumerate(zip(pred_slice, gt_slice, results.names)):
+                                pdb.set_trace()
+                                pred_vis = np.expand_dims(pred, axis=0)
+                                gt_vis = np.expand_dims(gt, axis=0)
+                                tracker.add_images(f"train_inference/{name}/pred", pred_vis, global_step)
+                                tracker.add_images(f"train_inference/{name}/gt",gt_vis, global_step)
+                                
+                                # 记录每个样本的metrics
                             tracker.add_scalar("metrics/psnr", results.metrics_log['psnr'], global_step)
-                            tracker.add_scalar("metrics/ssim", results.metrics_log['ssim'], global_step)
-                        else:
-                            tracker = accelerator.get_tracker("tensorboard")
+                            tracker.add_scalar("metrics/ssim", results.metrics_log['ssim'], global_step)                      
+                    else:
+                        tracker = accelerator.get_tracker("tensorboard")
 
                 if epoch % cfg.valid_epochs == 0 or epoch == cfg.num_epochs - 1:
                     # save the model
@@ -580,9 +591,6 @@ def main():
 
     accelerator.end_training()
 
-
-
-        
 
 
 
