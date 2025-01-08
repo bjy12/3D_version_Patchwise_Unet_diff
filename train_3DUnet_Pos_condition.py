@@ -21,7 +21,8 @@ from packaging import version
 from tqdm.auto import tqdm
 from omegaconf import OmegaConf
 #from model.Song3DUnet import Song_Unet3D
-from model.Song3DUnetV3 import Song_Unet3D
+#from model.Song3DUnetV3 import Song_Unet3D
+from model.Song3DUnetV4 import Song_Unet3D
 import diffusers
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 
@@ -33,7 +34,8 @@ from diffusers.utils.import_utils import is_xformers_available
 
 #from ddpm_process import save_pred_from_noise
 from pachify_and_projector import pachify3D , init_projector ,pachify3d_projected_points
-from training_cfg_pcc import BaseTrainingConfig
+#from training_cfg_pcc import BaseTrainingConfig
+from training_cfg_resnetbackbone import BaseTrainingConfig
 from utils import save_pred_to_local
 import pdb
 
@@ -397,6 +399,7 @@ def main():
             projs = batch['projs'].to(weight_dtype)
             clean_images = batch['gt_idensity'].to(weight_dtype)
             angles = batch['angles']
+            #pdb.set_trace()
             patch_image_tensor , patch_pos_tensor , projs_points_tensor =  pachify3d_projected_points(clean_images , patch_size , angles , projector, patch_pos=positions)
             projs_points_tensor = projs_points_tensor.to(weight_dtype)
             #clean_images , images_pos =  pachify3D(clean_images , patch_size)
@@ -523,8 +526,6 @@ def main():
                     # run pipeline in inference (sample random noise and denoise)
                     names = batch['name']
 
-
-
                     results = pipeline(
                             noisy_images=noisy_idensity,        # 从训练循环中获取
                             patch_pos_tensor=patch_pos_tensor,  # 从训练循环中获取
@@ -548,14 +549,18 @@ def main():
                             middle_slice = results.pred_samples.shape[2] // 2
                             pred_slice = results.pred_samples[:, :, middle_slice, :, :]
                             gt_slice = results.gt_samples[:, :, middle_slice, :, :]
-                        # 为每个样本添加带name的标签
-                            for idx, (pred, gt, name) in enumerate(zip(pred_slice, gt_slice, results.names)):
-                                pdb.set_trace()
+                            projs_vis = (projs.detach().cpu() + 1) / 2.0
+
+                            # 为每个样本添加带name的标签
+                            for idx, (pred, gt, proj_pair ,name) in enumerate(zip(pred_slice, gt_slice, projs_vis ,results.names)):
+                                #pdb.set_trace()
                                 pred_vis = np.expand_dims(pred, axis=0)
                                 gt_vis = np.expand_dims(gt, axis=0)
                                 tracker.add_images(f"train_inference/{name}/pred", pred_vis, global_step)
                                 tracker.add_images(f"train_inference/{name}/gt",gt_vis, global_step)
-                                
+                                for view_idx, proj in enumerate(proj_pair):
+                                    proj_vis = proj.unsqueeze(0)  # Add batch dimension [1, C, H, W]
+                                    tracker.add_images(f"train_inference/{name}/xray_proj_view_{view_idx}", proj_vis, global_step)
                                 # 记录每个样本的metrics
                             tracker.add_scalar("metrics/psnr", results.metrics_log['psnr'], global_step)
                             tracker.add_scalar("metrics/ssim", results.metrics_log['ssim'], global_step)                      

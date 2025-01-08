@@ -64,153 +64,6 @@ def get_filesname_from_txt(txt_file_path):
 
 
 
-class Self_LearningRandomBlockPoints_Dataset(Dataset):
-    def __init__(self, root_path,file_list, path_dict  , block_size ,train_mode=True):
-        self.root_dir = root_path
-        self.train_mode = train_mode
-        #pdb.set_trace()
-
-        self._path_dict = deepcopy(path_dict)
-        for key in self._path_dict.keys():
-            path = os.path.join(self.root_dir, self._path_dict[key])
-            self._path_dict[key] = path
-
- 
-        self.blocks = np.load(self._path_dict['blocks_coords'])  # [(outres * outres * outres ) , 3 ] 
-        self.blocks = (self.blocks - 0.5 ) * 2
-        self.blocks_size = block_size  
-        self.npoints = (block_size * block_size * block_size)      
-        self.name_list = file_list   
-
-        print(" files_data len : "   , len(self.name_list))
-
-
-
-    def __len__(self):
-        return len(self.name_list)   
-    
-    def load_ct(self, name):
-        image, _ = sitk_load(
-            os.path.join(self.root_dir, self._path_dict['image'].format(name)),
-            uint8=True
-        ) # float32
-
-        return image
-    
-    def load_block(self, name , b_idx):
-        #pdb.set_trace()
-        path = self._path_dict['blocks_vals'].format(name, b_idx)
-        block = np.load(path) # uint8
-        return block
-
-    def sample_points(self, points, values):
-        #pdb.set_trace()
-        #choice = np.random.choice(len(points), size=self.npoints, replace=False)
-        points = points
-        values = values
-        values = values.astype(np.float32) / 255.
-
-        return points , values
-
-
-    def __getitem__(self, index):
-        name = self.name_list[index]
-  
-        #pdb.set_trace()
-        if self.train_mode is False:
-            points = self.points
-            points_gt = self.load_ct(name)
-        else:
-            b_idx = np.random.randint(len(self.blocks))
-            block_values = self.load_block(name, b_idx)
-            #pdb.set_trace()
-            block_coords = self.blocks[b_idx] # [N, 3]
-            points, points_gt = self.sample_points(block_coords, block_values)
-            points_gt = points_gt[:,None]            
-            
-        points = torch.from_numpy(points)
-        points_gt = torch.from_numpy(points_gt)
-
-        coords_idensity = torch.concat([points , points_gt] , dim=-1)
-
-        coords_idensity = coords_idensity.reshape(self.blocks_size , self.blocks_size , self.blocks_size , 4)
-        
-        coords_idensity = rearrange(coords_idensity , " h w d c -> c h w d ")
-        
-
-        return coords_idensity
-
-
-class Self_LearningOverlapBlockPoints_Dataset(Dataset):
-    def __init__(self, root_path,file_list, path_dict  , block_size ,train_mode=True):
-        self.root_dir = root_path
-        self.train_mode = train_mode
-        #pdb.set_trace()
-
-        self._path_dict = deepcopy(path_dict)
-        for key in self._path_dict.keys():
-            path = os.path.join(self.root_dir, self._path_dict[key])
-            self._path_dict[key] = path
-
- 
-        self.blocks = np.load(self._path_dict['blocks_coords'])  # [(outres * outres * outres ) , 3 ] 
-        self.blocks = (self.blocks - 0.5 ) * 2
-        self.blocks_size = block_size  
-        self.npoints = (block_size * block_size * block_size)      
-        self.name_list = file_list   
-
-        print(" files_data len : "   , len(self.name_list))
-
-    def __len__(self):
-        return len(self.name_list)   
-    
-    def load_ct(self, name):
-        image, _ = sitk_load(
-            os.path.join(self.root_dir, self._path_dict['image'].format(name)),
-            uint8=True
-        ) # float32
-
-        return image
-    
-    def load_block(self, name , b_idx):
-        #pdb.set_trace()
-        path = self._path_dict['blocks_vals'].format(name, b_idx)
-        block = np.load(path) # uint8
-        return block
-
-    def sample_points(self, points, values):
-        #pdb.set_trace()
-        #choice = np.random.choice(len(points), size=self.npoints, replace=False)
-        points = points
-        values = values
-        values = values.astype(np.float32) / 255.
-
-        return points , values
-
-    def __getitem__(self, index):
-        name = self.name_list[index]
-  
-        #pdb.set_trace()
-        if self.train_mode is False:
-            points = self.points
-            points_gt = self.load_ct(name)
-        else:
-            b_idx = np.random.randint(len(self.blocks))
-            block_values = self.load_block(name, b_idx)
-            #pdb.set_trace()
-            block_coords = self.blocks[b_idx] # [N, 3]
-            points, points_gt = self.sample_points(block_coords, block_values)
-            #points_gt = points_gt[:,None]            
-            
-        points = torch.from_numpy(points)
-        points_gt = torch.from_numpy(points_gt)
-
-        coords_idensity = torch.concat([points , points_gt] , dim=-1)
-
-        coords_idensity = coords_idensity.permute(3,0,1,2)
-        
-        return coords_idensity
-
 
 class Self_LearningWithCoordsData(Dataset):
     def __init__(self, root_img , root_coords , files_name ,transform=None):
@@ -330,8 +183,11 @@ class Diffusion_Condition_Dataset(Dataset):
         projs = projs[:, None, ...]
         angles = angles[views]
 
+    
+        # normalization to [-1 , 1]
+        projs = (projs * 2) - 1
         # -- de-normalization
-        projs = projs * projs_max / 0.2
+        #projs = projs * projs_max / 0.2
 
         return projs, angles     
       

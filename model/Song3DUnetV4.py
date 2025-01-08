@@ -377,8 +377,18 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         implicit_mlp        = False,        # enable implicit coordinate encoding
         implict_condition_dim = [64,128,256] ,       # implict condition input dim 
         #image_encoder setting 
-        image_encoder_output  = 128 , 
+        img_channels = 3 ,
+        latent_dim = 512,
+        input_img_size = 256,
+        encoder_freeze_layer = "layer1", 
+        feature_layer = "layer3",
+        global_feature_layer = "layer4",
+        global_feature_layer_last = 22 ,
+        pretrained =  "imagenet",
+        weight_dir = '',
+        image_encoder_output  = 64 , 
         bilinear = False,
+        model_name = 'resnet101',
         #implict_func_model setting 
         pos_dim = 63 ,
         local_f_dim = 64 , 
@@ -399,9 +409,13 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
     ):
         super(Song_Unet3D , self).__init__()
         
-        self.image_feature_extractor = UNet(n_channels=1 , n_classes=image_encoder_output , bilinear=bilinear)
+        #self.image_feature_extractor = UNet(n_channels=1 , n_classes=image_encoder_output , bilinear=bilinear)
 
-        self.image_feature_extractor = ResNetGLEncoder()
+        self.image_feature_extractor = ResNetGLEncoder( in_channels= img_channels , latent_dim=latent_dim ,input_img_size=input_img_size , 
+                                                        encoder_freeze_layer = encoder_freeze_layer , feature_layer = feature_layer , 
+                                                        global_feature_layer = global_feature_layer , global_feature_layer_last=global_feature_layer_last , pretrained = pretrained ,
+                                                        weight_dir = weight_dir  , bilinear= bilinear , n_classed=image_encoder_output ,
+                                                        model_name = model_name   )
 
         self.combine = 'mlp'
         self.view_mixer = MLP([2, 2 // 2, 1])
@@ -451,8 +465,27 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         projs = projs.reshape(b * m, c, w, h) # B', C, W, H
         _ , _ , v_w , v_h ,v_d = coords_global.shape
         coords_global = coords_global.reshape(b,3,-1)
-       
-        proj_feats = self.image_feature_extractor(projs)
+        #pdb.set_trace()
+        proj_feats , global_feats  = self.image_feature_extractor(projs)
+        #pdb.set_trace()
+        global_feats = global_feats.squeeze(-1).squeeze(-1)
+        global_feats = global_feats.unsqueeze(1) #  B' 1  C
+        view_global_feats = []
+        globa_feats_ch = global_feats.shape[2]
+        for i in range(0,(b*m) , m):
+            #pdb.set_trace()
+            view_g = global_feats[i:i+m]
+            # 去掉中间的维度1
+            view_g = view_g.squeeze(1)  # [m, c] 
+            # 重塑并合并特征
+            view_g = view_g.reshape(1, 1, m * globa_feats_ch)  # [1, 1, m*c]
+            #pdb.set_trace()
+            view_global_feats.append(view_g)
+            
+        global_feats = torch.cat(view_global_feats, dim=0)
+
+        global_feats = global_feats.repeat(1,projs_points.shape[2],1)
+
         #pdb.set_trace()
         proj_feats = list(proj_feats) if type(proj_feats) is tuple else [proj_feats]
         for i in range(len(proj_feats)):
@@ -467,8 +500,8 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         pos_embed = self.pos_implic(coords_global)
         #pdb.set_trace()
         points_feats = points_feats.permute(0,2,1)
-
-        p_condition = self.implict_fn(pos_embed , points_feats)
+        pdb.set_trace()
+        p_condition = self.implict_fn(pos_embed , points_feats , global_feats)
         p_condition = p_condition.permute(0,2,1)
         #pdb.set_trace()
         p_condition = p_condition.reshape(b, -1, v_w, v_h ,v_d)
@@ -512,7 +545,7 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         b , c , h , w ,d = x.shape
         coords_global = x[:,1:4,...]
         points_implict = self.condition_process(projs , projs_points , coords_global)
-        #pdb.set_trace()
+        pdb.set_trace()
         pred = self.model(x , time_step , points_implict ,class_labels=class_labels)
         return pred
 
@@ -734,9 +767,10 @@ class SongUNet3DV3(torch.nn.Module):
                 self.dec[f'{res}x{res}x{res}_aux_conv'] = Conv3d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)      
         #pdb.set_trace()
     def forward(self, x, noise_labels, condition , class_labels=None, augment_labels=None):
-        #pdb.set_trace()
+        pdb.set_trace()
         if condition is not None:
             # use spatial_guided_cluster process condition 
+            pdb.set_trace()
             guided_condition = self.spatial_guided_cluster(x, condition)
             # need use group norm condition 
             guided_condition = silu(self.condition_norm(guided_condition))

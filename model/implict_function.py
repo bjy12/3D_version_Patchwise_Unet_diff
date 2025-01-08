@@ -90,7 +90,15 @@ class Implict_Fuc_Network(nn.Module):
         self.layers = nn.ModuleList([])  # 添加这行
         # 第一层
         self.layers.append(nn.Linear(self.in_dim, hidden_dim))
-        
+                # 逐步降维的全局特征处理器
+        self.global_feat_processor = nn.Sequential(
+            nn.Linear(1024, 512),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(512, 256),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(256, 128),
+            nn.LeakyReLU(inplace=True),
+        )
         # 中间隐藏层
         for i in range(1, self.num_layers - 1):
             if i in skips:
@@ -123,11 +131,13 @@ class Implict_Fuc_Network(nn.Module):
         else:
             raise NotImplementedError("Unknown last activation")
         
-    def forward(self, pos_feature, local_feature):
-
-        input_features = torch.cat([pos_feature , local_feature ] , dim=-1)
+    def forward(self, pos_feature, local_feature , global_feats):
+          
+        input_features = torch.cat([ pos_feature , local_feature ] , dim=-1)
+        res_feats = global_feats   #
+        res_feats = self.global_feat_processor(res_feats) 
+        pdb.set_trace()
         x = input_features
-
         # 前向传播
         for i in range(len(self.layers)):
             # 在跳跃连接层，将原始输入特征拼接到当前特征
@@ -140,8 +150,11 @@ class Implict_Fuc_Network(nn.Module):
             
             x = linear(x)
             x = activation(x)
+        #pdb.set_trace()
+        output = torch.cat([x , res_feats] , dim=2)
+        #pdb.set_trace()
 
-        output = x
+
         
         return output
 
