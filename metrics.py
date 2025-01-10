@@ -2,7 +2,7 @@ import numpy as np
 from skimage.metrics import peak_signal_noise_ratio as ski_psnr
 from skimage.metrics import structural_similarity as ski_ssim
 import torch
-from typing import Dict, Union, Tuple
+from typing import Dict, Union, Tuple , List
 from utils import sitk_load
 import logging
 import pdb
@@ -74,7 +74,63 @@ def calculate_metrics(pred: Union[np.ndarray, torch.Tensor],
     
     return metrics
 
-
+def calculate_metrics_each_names(pred: Union[np.ndarray, torch.Tensor],
+                     target: Union[np.ndarray, torch.Tensor],
+                     names: List[str],
+                     data_range: float = 1.0) -> List[Dict[str, Union[str, float]]]:
+    """
+    Calculate PSNR and SSIM metrics for each case in the batch.
+    
+    Args:
+        pred: Predicted image array/tensor (B, C, D, H, W) or (C, D, H, W)
+        target: Ground truth image array/tensor (B, C, D, H, W) or (C, D, H, W)
+        names: List of case names corresponding to each item in the batch
+        data_range: Data range of the input (default: 1.0 for normalized images)
+    
+    Returns:
+        List of dictionaries, each containing case name, PSNR and SSIM values
+    """
+    # Convert torch tensors to numpy if needed
+    if isinstance(pred, torch.Tensor):
+        pred = pred.detach().cpu().numpy()
+    if isinstance(target, torch.Tensor):
+        target = target.detach().cpu().numpy()
+    
+    # Ensure 5D format (B, C, D, H, W)
+    if pred.ndim == 4:
+        pred = pred[np.newaxis, ...]
+    if target.ndim == 4:
+        target = target[np.newaxis, ...]
+    
+    batch_size = pred.shape[0]
+    case_metrics = []
+    
+    # Calculate metrics for each case in batch
+    for i in range(batch_size):
+        pred_sample = pred[i, 0]  # Take first channel only
+        target_sample = target[i, 0]
+        
+        # Calculate PSNR
+        psnr_val = ski_psnr(target_sample,
+                           pred_sample,
+                           data_range=data_range)
+        
+        # Calculate SSIM
+        ssim_val = ski_ssim(target_sample,
+                           pred_sample,
+                           data_range=data_range,
+                           channel_axis=None)  # No channel axis for 3D
+        
+        # Store metrics for this case
+        case_metrics.append({
+            'name': names[i],
+            'psnr': float(psnr_val),
+            'ssim': float(ssim_val)
+        })
+        
+        logger.info(f"Case {names[i]} - PSNR: {psnr_val:.4f}, SSIM: {ssim_val:.4f}")
+    
+    return case_metrics
 
 
 if __name__ == '__main__':

@@ -136,7 +136,7 @@ class Implict_Fuc_Network(nn.Module):
         input_features = torch.cat([ pos_feature , local_feature ] , dim=-1)
         res_feats = global_feats   #
         res_feats = self.global_feat_processor(res_feats) 
-        pdb.set_trace()
+        #pdb.set_trace()
         x = input_features
         # 前向传播
         for i in range(len(self.layers)):

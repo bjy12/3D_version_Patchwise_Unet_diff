@@ -195,7 +195,8 @@ class Diffusion_Condition_Dataset(Dataset):
         name = self.files_names[index]
         gt_idensity = self.load_ct(name)  # scale to [0,1]
         #normalization [-1,1] follow diffusion input 
-        gt_idensity = (gt_idensity * 2) - 1 
+        gt_idensity = gt_idensity.astype(np.float32)
+        gt_idensity = (gt_idensity * 2) - 1 # to [-1,1]
         projs, angles = self.sample_projections(name ,n_view=2)
         #pdb.set_trace()
         ret_dict = {

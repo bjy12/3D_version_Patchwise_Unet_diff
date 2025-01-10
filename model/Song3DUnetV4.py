@@ -500,7 +500,7 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         pos_embed = self.pos_implic(coords_global)
         #pdb.set_trace()
         points_feats = points_feats.permute(0,2,1)
-        pdb.set_trace()
+        # pdb.set_trace()
         p_condition = self.implict_fn(pos_embed , points_feats , global_feats)
         p_condition = p_condition.permute(0,2,1)
         #pdb.set_trace()
@@ -545,7 +545,7 @@ class Song_Unet3D(ModelMixin , ConfigMixin):
         b , c , h , w ,d = x.shape
         coords_global = x[:,1:4,...]
         points_implict = self.condition_process(projs , projs_points , coords_global)
-        pdb.set_trace()
+        #pdb.set_trace()
         pred = self.model(x , time_step , points_implict ,class_labels=class_labels)
         return pred
 
@@ -767,10 +767,10 @@ class SongUNet3DV3(torch.nn.Module):
                 self.dec[f'{res}x{res}x{res}_aux_conv'] = Conv3d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)      
         #pdb.set_trace()
     def forward(self, x, noise_labels, condition , class_labels=None, augment_labels=None):
-        pdb.set_trace()
+        #pdb.set_trace()
         if condition is not None:
             # use spatial_guided_cluster process condition 
-            pdb.set_trace()
+            #pdb.set_trace()
             guided_condition = self.spatial_guided_cluster(x, condition)
             # need use group norm condition 
             guided_condition = silu(self.condition_norm(guided_condition))

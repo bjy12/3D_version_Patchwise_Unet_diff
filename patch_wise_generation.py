@@ -111,9 +111,10 @@ class TrainingInferencePipeline(DiffusionPipeline):
         final_pred = final_pred.clamp(0, 1).cpu().numpy()
 
         # 获取ground truth
+        patch_image_tensor = patch_image_tensor.astype(torch.float32)
         patch_image_tensor = ( patch_image_tensor + 1. ) / 2.
         gt_image = patch_image_tensor.clamp(0,1).cpu().numpy()
-
+        
         metrics_dict = calculate_metrics(final_pred , gt_image , data_range=1.0)
         print(f"\nQuality Metrics:")
         print(f"PSNR: {metrics_dict['psnr']:.4f}")

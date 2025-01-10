@@ -89,8 +89,8 @@ class BaseTrainingConfig:
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2'
-    #image_root: str = '/root/share/processed_128x128_s2'
+    #image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2'
+    image_root: str = '/root/share/processed_128x128_s2'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
     files_list_path: str = './files_name/pelvic_coord_train_16.txt'
     geo_cfg_path: str = './geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'

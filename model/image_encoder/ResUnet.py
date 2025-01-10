@@ -4,7 +4,7 @@ import torch
 import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
-
+import copy
 from collections import OrderedDict
 import pdb
 from PIL import Image
@@ -143,7 +143,8 @@ class ResNetGLEncoder(nn.Module):
             new_tmp = []
             for name, layer in tmp.named_modules():
                 if len(name) > 0 and name in  self.global_feature_layers_in_last:
-                    new_tmp.append(layer)
+                    
+                    new_tmp.append(copy.deepcopy(layer))
             setattr(getattr(self.model, self.global_feature_layer), str(self.global_feature_layer_last), nn.Sequential(*new_tmp))
 
         ## get feature_layer's dim
@@ -226,7 +227,8 @@ class ResNetGLEncoder(nn.Module):
         local_feature = self.up1(local_feature, skip_connections['initial'])
         #pdb.set_trace()
         local_feature = self.last_up(local_feature)
-        local_feature =  self.outc(local_feature)
+        #
+        local_feature = self.outc(local_feature)
         #pdb.set_trace()
 
 

@@ -11,16 +11,19 @@ from dataclasses import dataclass
 import numpy as np
 import SimpleITK as sitk
 from tqdm.auto import tqdm
-from typing import Optional, Union, Dict
+from typing import Optional, Union, Dict ,List
 from omegaconf import OmegaConf
 import yaml
-from model.Song3DUnet import Song_Unet3D
+#from model.Song3DUnet import Song_Unet3D
+from model.Song3DUnetV4 import Song_Unet3D
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from datasets.geometry import Geometry
 from pachify_and_projector import pachify3d_projected_points , init_projector
-from training_cfg_pcc import BaseTrainingConfig
+#from training_cfg_pcc import BaseTrainingConfig
+from training_cfg_resnetbackbone import BaseTrainingConfig
 from datasets.datautils3d import load_diffusion_condition
+from metrics import calculate_metrics ,calculate_metrics_each_names
 import pdb
 
 # 创建logger
@@ -40,14 +43,15 @@ class InferenceOutput(BaseOutput):
 def load_model_from_checkpoint(checkpoint_dir: str, use_ema: bool = True) -> Dict:
     """Load model and configuration from checkpoint directory."""
     logger.info(f"Loading model from checkpoint: {checkpoint_dir}")
-    model = Song_Unet3D.from_pretrained(checkpoint_dir, subfolder="unet")
+    model = Song_Unet3D.from_pretrained(checkpoint_dir, subfolder="unet" ,assign=True)
     
     ema_model = None
     if use_ema and os.path.exists(os.path.join(checkpoint_dir, "unet_ema")):
         logger.info("Loading EMA model")
         ema_model = EMAModel.from_pretrained(
             os.path.join(checkpoint_dir, "unet_ema"), 
-            Song_Unet3D
+            Song_Unet3D,
+            assign=True
         )
     
     return {
@@ -66,7 +70,7 @@ class CheckpointInferencePipeline(DiffusionPipeline):
         
 
         #self._device = None
-        pdb.set_trace()
+        #pdb.set_trace()
         if use_acc:
 
              self.accelerator = Accelerator(mixed_precision=None)
@@ -115,6 +119,7 @@ class CheckpointInferencePipeline(DiffusionPipeline):
         # 保存配置和其他必要的属性
         pipeline.cfg = cfg
         pipeline.projector = init_projector(cfg.geo_cfg_path)
+        pdb.set_trace()
         pipeline.patch_size = cfg.pachify_size
         pipeline.start_pos = (cfg.img_resolution - cfg.pachify_size) // 2
         pipeline.positions = {
@@ -138,16 +143,17 @@ class CheckpointInferencePipeline(DiffusionPipeline):
     #     super().to(device)
     #     return self
 
-    def _save_volume(self, image: np.ndarray, save_path: str, uint8: bool = True):
+    def _save_volume(self, image: np.ndarray, save_path: str , spacing: np.ndarray):
         """Helper method to save 3D volumes."""
-        if uint8:
-            image = (image * 255).astype(np.uint8)
-        
+        # if uint8:
+        #     image = (image * 255).astype(np.uint8)
         if len(image.shape) == 5:  # Batch of volumes
             for i in range(image.shape[0]):
                 volume = image[i, 0]  # Take first channel
                 volume = volume.transpose(2, 1, 0)  # Adjust for SimpleITK
                 sitk_image = sitk.GetImageFromArray(volume)
+                if spacing is not None:
+                    sitk_image.SetSpacing(spacing.astype(np.float64)) # unit: mm
                 batch_save_path = save_path.format(batch_idx=i)
                 os.makedirs(os.path.dirname(batch_save_path), exist_ok=True)
                 sitk.WriteImage(sitk_image, batch_save_path)
@@ -155,8 +161,33 @@ class CheckpointInferencePipeline(DiffusionPipeline):
             volume = image[0]  # Take first channel
             volume = volume.transpose(2, 1, 0)  # Adjust for SimpleITK
             sitk_image = sitk.GetImageFromArray(volume)
+            if spacing is not None:
+                sitk_image.SetSpacing(spacing.astype(np.float64)) # unit: mm
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             sitk.WriteImage(sitk_image, save_path)
+
+    def save_metrics_to_txt(self, all_metrics: List[Dict], output_dir: str):
+        """保存metrics到txt文件"""
+        metrics_path = os.path.join(output_dir, 'case_metrics.txt')
+        os.makedirs(os.path.dirname(metrics_path), exist_ok=True)
+        
+        with open(metrics_path, 'w') as f:
+            # 写入标题行
+            f.write(f"{'Batch':^6} {'Case Name':<20} {'PSNR':^10} {'SSIM':^10}\n")
+            f.write("-" * 50 + "\n")  # 分隔线
+            
+            # 写入每个case的metrics
+            for metric in all_metrics:
+                f.write(f"{metric['batch_idx']:^6} {metric['name']:<20} "
+                       f"{metric['psnr']:^10.4f} {metric['ssim']:^10.4f}\n")
+            
+            # 写入平均值
+            f.write("-" * 50 + "\n")  # 分隔线
+            avg_psnr = sum(m['psnr'] for m in all_metrics) / len(all_metrics)
+            avg_ssim = sum(m['ssim'] for m in all_metrics) / len(all_metrics)
+            f.write(f"{'Average':^26} {avg_psnr:^10.4f} {avg_ssim:^10.4f}\n")
+        
+        logger.info(f"Saved metrics to {metrics_path}")
 
     @torch.no_grad()
     def __call__(
@@ -178,6 +209,7 @@ class CheckpointInferencePipeline(DiffusionPipeline):
         self.net.eval()
         self.scheduler.set_timesteps(num_inference_steps)
         results = []
+        all_metrics = []
         dataloader = self.accelerator.prepare(dataloader)
 
         for batch_idx, batch in enumerate(tqdm(dataloader)):
@@ -189,6 +221,7 @@ class CheckpointInferencePipeline(DiffusionPipeline):
             projs = batch['projs'].to(dtype=self.weight_dtype)
             clean_images = batch['gt_idensity'].to(dtype=self.weight_dtype)
             angles = batch['angles']
+            batch_names = batch['name']
             # Process data using pachify3d_projected_points
             patch_image_tensor, patch_pos_tensor, projs_points_tensor = pachify3d_projected_points(
                 clean_images,
@@ -227,7 +260,7 @@ class CheckpointInferencePipeline(DiffusionPipeline):
                     projs, 
                     projs_points_tensor
                 )
-
+                
                 # Split position and noise components
                 pos = noisy_image[:, 1:4, ...]
                 noise_part = noisy_image[:, :1, ...]
@@ -243,7 +276,6 @@ class CheckpointInferencePipeline(DiffusionPipeline):
                 # Recombine noise and position information
                 noisy_image = torch.cat([scheduler_output.prev_sample, pos], dim=1)
                 
-                batch_names = batch['name']
                 
                # Save intermediates if requested
                 if save_intermediates and step_idx % save_interval == 0 and output_dir:
@@ -260,7 +292,35 @@ class CheckpointInferencePipeline(DiffusionPipeline):
             # Process final prediction
             final_pred = (scheduler_output.pred_original_sample + 1) / 2
             final_pred = final_pred.clamp(0, 1).cpu().numpy()
-            gt_image = patch_image_tensor.cpu().numpy()
+            gt_image   = patch_image_tensor.cpu().numpy()
+            gt_image   = ( gt_image + 1 ) / 2 
+            
+            
+            final_pred = (final_pred * 255).astype(np.uint8)
+            gt_image = (gt_image * 255).astype(np.uint8)
+            # 计算每个case的metrics
+            case_metrics = calculate_metrics_each_names(
+                pred=final_pred,
+                target=gt_image,
+                names=batch_names,
+                data_range=255
+            )
+            spacing_values = np.array([2.0, 2.0, 2.0], dtype=np.float64)
+            # 添加batch信息并存储metrics
+            batch_psnr = 0
+            batch_ssim = 0
+            for metric in case_metrics:
+                metric['batch_idx'] = batch_idx
+                all_metrics.append(metric)
+                batch_psnr += metric['psnr']
+                batch_ssim += metric['ssim']
+                # 打印每个case的metrics
+                logger.info(f"Case {metric['name']}: PSNR = {metric['psnr']:.4f}, SSIM = {metric['ssim']:.4f}")
+            
+            # 打印当前batch的平均metrics
+            batch_avg_psnr = batch_psnr / len(case_metrics)
+            batch_avg_ssim = batch_ssim / len(case_metrics)
+            logger.info(f"\nBatch {batch_idx} Average - PSNR: {batch_avg_psnr:.4f}, SSIM: {batch_avg_ssim:.4f}\n")
 
             # Save final results if output directory provided
             if output_dir:
@@ -274,27 +334,30 @@ class CheckpointInferencePipeline(DiffusionPipeline):
                         f'ground_truth/sample_{batch_idx:04d}_{name}.nii.gz'
                     )
                 if self.accelerator.is_main_process:
-                    self._save_volume(final_pred, pred_path)
-                    self._save_volume(gt_image, gt_path)
+                    self._save_volume(final_pred, pred_path ,spacing=spacing_values)
+                    self._save_volume(gt_image, gt_path , spacing=spacing_values)
+
 
             results.append(InferenceOutput(
                 predictions=final_pred,
                 ground_truth=gt_image
             ))
-            
+            #pdb.set_trace()
             logger.info(f"Completed inference for batch {batch_idx}")
+        if output_dir and self.accelerator.is_main_process:
+            self.save_metrics_to_txt(all_metrics, output_dir)
 
-        return results
+        return results , all_metrics
 
 
 
 if __name__ == "__main__":
     pipeline = CheckpointInferencePipeline.from_pretrained(
-                checkpoint_dir='./logging_dir/checkpoint-50000',
+                checkpoint_dir='./logging_dir/checkpoint-60000',
                 config_path='./cfg_pcc.json',
                 use_ema=False)
     #pipeline.to('cuda')
-    pdb.set_trace()
+    #pdb.set_trace()
     dataset = load_diffusion_condition(
         pipeline.cfg.image_root, 
         pipeline.cfg.files_list_path
@@ -306,8 +369,12 @@ if __name__ == "__main__":
         num_workers=pipeline.cfg.dataloader_num_workers
     )
     pdb.set_trace()
-    results = pipeline(dataloader=dataloader, num_inference_steps=1000,output_dir='./inference_outputs_50000',save_intermediates=False,save_interval=100)
-
+    results , metrics = pipeline(dataloader=dataloader, num_inference_steps=1000,output_dir='./inference_outputs_55000_steps700',save_intermediates=False,save_interval=100)
+    
+    # 可以查看每个case的metrics
+    for metric in metrics:
+        print(f"Batch {metric['batch_idx']}, Case {metric['name']}: "
+              f"PSNR = {metric['psnr']:.4f}, SSIM = {metric['ssim']:.4f}")
 
 
 
