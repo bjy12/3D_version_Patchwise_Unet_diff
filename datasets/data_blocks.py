@@ -118,7 +118,7 @@ class Overlap_Blocks_Dataset(Dataset):
             path = os.path.join(self.data_root, self._path_dict[key])
             self._path_dict[key] = path
         self.blocks_path = os.path.join(self.data_root,'blocks')
-        pdb.set_trace()
+        #pdb.set_trace()
         # 根据names 在 blocks_path 下寻找文件 并将其放入all_blocks_name中
         all_files = os.listdir(self.blocks_path)
         self.all_blocks_name = []
@@ -133,7 +133,7 @@ class Overlap_Blocks_Dataset(Dataset):
         self.all_blocks_name.sort()
         
         print(f"Found {len(self.all_blocks_name)} block files from {len(names)} base names")
-        pdb.set_trace()
+        #pdb.set_trace()
         
         self.blocks = np.load(os.path.join(self.data_root, self._path_dict['blocks_coords']))
 
@@ -210,11 +210,9 @@ class Overlap_Blocks_Dataset(Dataset):
 
         points_projs , _ = self.project_points(p_for_projected , angles) 
         #pdb.set_trace()
-
-
-
         values = values.transpose(3,0,1,2)
         block_coords = block_coords.transpose(3,0,1,2)
+        block_name = block_name.split('.')[0]
         ret_dict = {
             'name': block_name ,
             'gt_idensity':values,  # [-1,1]   h w d 1

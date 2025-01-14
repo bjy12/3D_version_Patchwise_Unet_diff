@@ -122,19 +122,23 @@ class TrainingInferencePipeline(DiffusionPipeline):
         # 保存结果（如果指定了保存路径）
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
-            
+            # 确保 names 是一个 list 类型
+            if isinstance(names, str):
+                names = [names]  # 如果是字符串，将其转换为包含单一元素的列表
+            elif not isinstance(names, list):
+                raise TypeError("Expected 'names' to be either a string or a list of strings")
             # 如果提供了names，使用name保存每个样本
             if names is not None:
                 for idx, name in enumerate(names):
                     # 为每个样本创建子目录
                     sample_dir = os.path.join(save_path, name)
                     os.makedirs(sample_dir, exist_ok=True)
-                    
+                    #pdb.set_trace()
                     # 保存预测结果和ground truth
                     sitk_save(os.path.join(sample_dir, 'pred.nii.gz'), 
-                             final_pred[idx:idx+1], uint8=True)
+                             final_pred[idx:idx+1,0,...], uint8=True)
                     sitk_save(os.path.join(sample_dir, 'gt.nii.gz'), 
-                             gt_image[idx:idx+1], uint8=True)
+                             gt_image[idx:idx+1,0,...], uint8=True)
                     # 保存metrics到文本文件
             else:
                 # 如果没有提供names，使用原来的保存方式

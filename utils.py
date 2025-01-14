@@ -5,7 +5,35 @@ import SimpleITK as sitk
 import pdb
 from tqdm import tqdm
 
-
+def get_random_batch(dataloader, logger, max_attempts=10):
+    """从dataloader中随机抽取一个batch并验证其有效性"""
+    dataset_size = len(dataloader.dataset)
+    
+    valid_batch_found = False
+    attempt = 0
+    last_batch = None
+    
+    while attempt < max_attempts and not valid_batch_found:
+        # 随机选择一个索引
+        random_idx = torch.randint(0, dataset_size, (1,)).item()  # 只获取一个索引值
+        # 获取随机样本
+        batch = dataloader.dataset[random_idx]  # 直接获取一个样本
+        
+        last_batch = batch
+        # 检查有效性
+        if not check_tensor_validity(batch['gt_idensity']):
+            valid_batch_found = True
+            logger.info("Found valid batch for evaluation")
+        else:
+            attempt += 1
+            logger.info(f"Found invalid batch, retry {attempt}/{max_attempts}")
+    
+    if not valid_batch_found:
+        logger.warning(f"Could not find valid batch after {max_attempts} attempts, using last batch")
+        batch = last_batch
+    pdb.set_trace()
+    # 将单个样本转换为"batch"格式（添加batch维度）
+    return batch, valid_batch_found
 def write_img(vol, out_path, ref_path, new_spacing=None):
     img_ref = sitk.ReadImage(ref_path)
     img = sitk.GetImageFromArray(vol)
@@ -18,6 +46,14 @@ def write_img(vol, out_path, ref_path, new_spacing=None):
     sitk.WriteImage(img, out_path)
     print('Save to:', out_path)
 
+def check_tensor_validity(tensor):
+    """检查张量是否所有值都相同
+    Args:
+        tensor (torch.Tensor): 输入张量
+    Returns:
+        bool: 如果所有值相同返回True，否则返回False
+    """
+    return bool((tensor == tensor.reshape(-1)[0]).all())
 
 
 def sitk_load(path, uint8=False, spacing_unit='mm'):

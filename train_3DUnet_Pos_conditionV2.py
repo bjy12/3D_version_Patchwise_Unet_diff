@@ -37,7 +37,7 @@ from diffusers.utils.import_utils import is_xformers_available
 from pachify_and_projector import pachify3D , init_projector ,pachify3d_projected_points
 #from training_cfg_resnetbackbone import BaseTrainingConfig
 from training_cfg_resnetbackbone_overlap import BaseTrainingConfig
-from utils import save_pred_to_local
+from utils import save_pred_to_local ,check_tensor_validity ,get_random_batch
 import pdb
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -232,7 +232,7 @@ def main():
         # dataset = load_slice_dataset(cfg.image_root ,  cfg.files_list_path )
         dataset = load_overlap_diffusion_blocks(cfg.image_root ,cfg.train_list_path ,cfg.geo_cfg_path)
         test_dataset = load_overlap_diffusion_blocks(cfg.image_root , cfg.test_list_path , cfg.geo_cfg_path)
-        pdb.set_trace()
+        #pdb.set_trace()
         logger.info(f"Train Dataset size: {len(dataset)}")
         logger.info(f"Test Dataset size: {len(test_dataset)}")
     #else:
@@ -263,8 +263,8 @@ def main():
     )
 
     # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_dataloader,test_dataloader , lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader,test_dataloader ,lr_scheduler 
     )
 
     if cfg.use_ema:
@@ -322,25 +322,7 @@ def main():
                 num_update_steps_per_epoch * cfg.gradient_accumulation_steps)
 
     # Train!
-    # Train progressive patch size     
-    if cfg.use_multi_patch_size:
-        batch_mul_dict = {64:2 , 32:2 , 16:2 }
-        real_p = 0.5 # 选择每个patch size的概率
-        p_list = np.array([(1-real_p)*2/5, (1-real_p)*3/5, real_p])
-        img_resolution = 128
-        #patch_list = np.array([img_resolution//4, img_resolution//2, img_resolution])  # 32  64 128 
-        patch_list = np.array([img_resolution//8, img_resolution//4,img_resolution//2]) # 32 64 
-        #batch_mul_avg = np.sum(np.array(p_list) * np.array([4, 2, 1]))  # 2 
-        progressive = True
-    else:
-        patch_size = cfg.pachify_size
-    # patch pos 
-    start_pos = (128 - patch_size) // 2 
-    positions = {
-        'i': start_pos ,
-        'j': start_pos ,
-        'k': start_pos ,
-    }    
+ 
     
     for epoch in range(first_epoch, cfg.num_epochs):
         model.train()
@@ -354,17 +336,6 @@ def main():
                 if step % cfg.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
-            if cfg.use_multi_patch_size == True:
-                if progressive:
-                    p_cumsum = p_list.cumsum()
-                    p_cumsum[-1] = 10.
-                    prog_mask = (global_step / max_train_steps) <= p_cumsum
-                    patch_size = int(patch_list[prog_mask][0])
-                    #batch_mul = batch_mul_dict[patch_size]
-                else:
-                    patch_size = int(np.random.choice(patch_list, p=p_list))
-            else:
-                patch_size = patch_size
                 #batch_mul = batch_mul_dict[patch_size]
             #batch_mul = batch_mul_dict[patch_size] // batch_mul_dict[img_resolution]
             #pdb.set_trace()
@@ -475,12 +446,8 @@ def main():
                 if epoch % cfg.valid_epochs == 0 or epoch == cfg.num_epochs - 1:
                     net = accelerator.unwrap_model(model)
                     #pdb.set_trace()
-                    device = accelerator.device                    
-                    if cfg.use_ema:
-                        ema_model.store(net.parameters())
-                        ema_model.copy_to(net.parameters())
-                    #pdb.set_trace()
 
+                    device = accelerator.device                    
                     pipeline = TrainingInferencePipeline(
                         net=net,
                         scheduler=noise_scheduler,
@@ -491,59 +458,64 @@ def main():
                     save_dir = os.path.join(vis_dir, f'epoch_{epoch}_step_{global_step}')
                     # run pipeline in inference (sample random noise and denoise)
                     # 从test_dataloader中随机选择一个batch
-                    test_batch = next(iter(test_dataloader))
                     
-                    # 将数据移到正确设备
-                    test_batch = {
-                        'projs': test_batch['projs'].to(device).to(weight_dtype),
-                        'gt_idensity': test_batch['gt_idensity'].to(device).to(weight_dtype),
-                        'block_coords': test_batch['block_coords'].to(device).to(weight_dtype),
-                        'points_projs': test_batch['points_projs'].to(device).to(weight_dtype),
-                        'name': test_batch['name']
-                    }
+                    with torch.no_grad():
+                        test_batch , valid_batch_found = get_random_batch(test_dataloader , logger , max_attempts=15)                 # 使用contiguous()确保内存连续，提高效率
+                        pdb.set_trace()
+                        test_batch = {
+                            'projs': torch.from_numpy(test_batch['projs']).unsqueeze(0).to(weight_dtype).contiguous().to('cuda'),
+                            'gt_idensity': torch.from_numpy(test_batch['gt_idensity']).unsqueeze(0).to(weight_dtype).contiguous().to('cuda'),
+                            'block_coords': torch.from_numpy(test_batch['block_coords']).unsqueeze(0).to(weight_dtype).contiguous().to('cuda'),
+                            'points_projs': torch.from_numpy(test_batch['points_projs']).unsqueeze(0).to(weight_dtype).contiguous().to('cuda'),
+                            'name': test_batch['name']
+                        }
+                        pdb.set_trace()
+                        try:
+                            results = pipeline(
+                                noisy_images=test_batch['gt_idensity'],
+                                patch_pos_tensor=test_batch['block_coords'],
+                                projs=test_batch['projs'],
+                                projs_points_tensor=test_batch['points_projs'],
+                                patch_image_tensor=test_batch['gt_idensity'],
+                                generator=generator,
+                                num_inference_steps=100,
+                                save_path=save_dir,
+                                names=test_batch['name']
+                            )
 
-                    results = pipeline(
-                        noisy_images=test_batch['gt_idensity'],
-                        patch_pos_tensor=test_batch['block_coords'],
-                        projs=test_batch['projs'],
-                        projs_points_tensor=test_batch['points_projs'],
-                        patch_image_tensor=test_batch['gt_idensity'],
-                        generator=generator,
-                        num_inference_steps=cfg.ddpm_num_inference_steps,
-                        save_path=save_dir,
-                        names=test_batch['name']
-                    )
+                            if cfg.logger == "tensorboard":
+                                if is_accelerate_version(">=", "0.17.0.dev0"):
+                                    tracker = accelerator.get_tracker("tensorboard", unwrap=True)
+                                    middle_slice = results.pred_samples.shape[2] // 2
+                                    pred_slice = results.pred_samples[:, :, middle_slice, :, :]
+                                    gt_slice = results.gt_samples[:, :, middle_slice, :, :]
+                                    projs_vis = (test_batch['projs'] + 1.) / 2.0
 
-                    if cfg.use_ema:
-                        ema_model.restore(net.parameters())
+                                    # 记录结果到tensorboard
+                                    for idx, (pred, gt, proj_pair, name) in enumerate(zip(
+                                            pred_slice, gt_slice, projs_vis, results.names)):
+                                        pdb.set_trace()
+                                        pred_vis = np.expand_dims(pred, axis=0)
+                                        gt_vis = np.expand_dims(gt, axis=0)
+                                        
+                                        # 添加batch的验证状态到可视化名称中
+                                        status = "valid" if valid_batch_found else "fallback"
+                                        tracker.add_images(f"test_inference/{status}/{name}/pred", pred_vis, global_step)
+                                        tracker.add_images(f"test_inference/{status}/{name}/gt", gt_vis, global_step)
+                                        
+                                        for view_idx, proj in enumerate(proj_pair):
+                                            proj_vis = proj.unsqueeze(0)
+                                            tracker.add_images(
+                                                f"test_inference/{status}/{name}/xray_proj_view_{view_idx}", 
+                                                proj_vis, 
+                                                global_step
+                                            )
+                                    
+                                    tracker.add_scalar("test_metrics/psnr", results.metrics_log['psnr'], global_step)
+                                    tracker.add_scalar("test_metrics/ssim", results.metrics_log['ssim'], global_step)
 
-                    # denormalize the images and save to tensorboard
-
-                    if cfg.logger == "tensorboard":
-                        if is_accelerate_version(">=", "0.17.0.dev0"):
-                            tracker = accelerator.get_tracker(
-                                "tensorboard", unwrap=True)
-                            middle_slice = results.pred_samples.shape[2] // 2
-                            pred_slice = results.pred_samples[:, :, middle_slice, :, :]
-                            gt_slice = results.gt_samples[:, :, middle_slice, :, :]
-                            projs_vis = (projs.detach().cpu() + 1.) / 2.0
-
-                            # 为每个样本添加带name的标签
-                            for idx, (pred, gt, proj_pair ,name) in enumerate(zip(pred_slice, gt_slice, projs_vis ,results.names)):
-                                #pdb.set_trace()
-                                pred_vis = np.expand_dims(pred, axis=0)
-                                gt_vis = np.expand_dims(gt, axis=0)
-                                tracker.add_images(f"train_inference/{name}/pred", pred_vis, global_step)
-                                tracker.add_images(f"train_inference/{name}/gt",gt_vis, global_step)
-                                for view_idx, proj in enumerate(proj_pair):
-                                    proj_vis = proj.unsqueeze(0)  # Add batch dimension [1, C, H, W]
-                                    tracker.add_images(f"train_inference/{name}/xray_proj_view_{view_idx}", proj_vis, global_step)
-                                # 记录每个样本的metrics
-                            tracker.add_scalar("metrics/psnr", results.metrics_log['psnr'], global_step)
-                            tracker.add_scalar("metrics/ssim", results.metrics_log['ssim'], global_step)                      
-                    else:
-                        tracker = accelerator.get_tracker("tensorboard")
-
+                        except Exception as e:
+                            logger.error(f"Error during evaluation: {str(e)}")
                 if epoch % cfg.valid_epochs == 0 or epoch == cfg.num_epochs - 1:
                     # save the model
                     last_eval_dir = os.path.join(logging_dir , 'last_eval')
