@@ -31,7 +31,7 @@ def get_random_batch(dataloader, logger, max_attempts=10):
     if not valid_batch_found:
         logger.warning(f"Could not find valid batch after {max_attempts} attempts, using last batch")
         batch = last_batch
-    pdb.set_trace()
+    #pdb.set_trace()
     # 将单个样本转换为"batch"格式（添加batch维度）
     return batch, valid_batch_found
 def write_img(vol, out_path, ref_path, new_spacing=None):

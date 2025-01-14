@@ -1,7 +1,7 @@
 {
     "logging_dir": "v0_logs",
     "output_dir": "logging_dir",
-    "num_epochs": 2000,
+    "num_epochs": 3000,
     "train_batch_size":2,
     "checkpointing_steps": 5000,
     "valid_epochs": 50,

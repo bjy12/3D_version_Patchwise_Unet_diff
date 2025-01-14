@@ -461,7 +461,7 @@ def main():
                     
                     with torch.no_grad():
                         test_batch , valid_batch_found = get_random_batch(test_dataloader , logger , max_attempts=15)                 # 使用contiguous()确保内存连续，提高效率
-                        pdb.set_trace()
+                        #pdb.set_trace()
                         test_batch = {
                             'projs': torch.from_numpy(test_batch['projs']).unsqueeze(0).to(weight_dtype).contiguous().to('cuda'),
                             'gt_idensity': torch.from_numpy(test_batch['gt_idensity']).unsqueeze(0).to(weight_dtype).contiguous().to('cuda'),
@@ -469,7 +469,7 @@ def main():
                             'points_projs': torch.from_numpy(test_batch['points_projs']).unsqueeze(0).to(weight_dtype).contiguous().to('cuda'),
                             'name': test_batch['name']
                         }
-                        pdb.set_trace()
+                        #pdb.set_trace()
                         try:
                             results = pipeline(
                                 noisy_images=test_batch['gt_idensity'],
