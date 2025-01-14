@@ -109,9 +109,9 @@ class TrainingInferencePipeline(DiffusionPipeline):
         final_pred = noise_pred.pred_original_sample
         final_pred = (final_pred + 1. ) / 2.
         final_pred = final_pred.clamp(0, 1).cpu().numpy()
-
+        #pdb.set_trace()
         # 获取ground truth
-        patch_image_tensor = patch_image_tensor.astype(torch.float32)
+        #patch_image_tensor = patch_image_tensor.astype(torch.float32)
         patch_image_tensor = ( patch_image_tensor + 1. ) / 2.
         gt_image = patch_image_tensor.clamp(0,1).cpu().numpy()
         
