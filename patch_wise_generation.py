@@ -133,12 +133,12 @@ class TrainingInferencePipeline(DiffusionPipeline):
                     # 为每个样本创建子目录
                     sample_dir = os.path.join(save_path, name)
                     os.makedirs(sample_dir, exist_ok=True)
-                    #pdb.set_trace()
+                    pdb.set_trace()
                     # 保存预测结果和ground truth
                     sitk_save(os.path.join(sample_dir, 'pred.nii.gz'), 
-                             final_pred[idx:idx+1,0,...], uint8=True)
+                             final_pred[idx,0,...], uint8=True)
                     sitk_save(os.path.join(sample_dir, 'gt.nii.gz'), 
-                             gt_image[idx:idx+1,0,...], uint8=True)
+                             gt_image[idx,0,...], uint8=True)
                     # 保存metrics到文本文件
             else:
                 # 如果没有提供names，使用原来的保存方式

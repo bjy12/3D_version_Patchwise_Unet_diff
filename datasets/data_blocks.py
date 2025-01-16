@@ -122,13 +122,13 @@ class Overlap_Blocks_Dataset(Dataset):
         # 根据names 在 blocks_path 下寻找文件 并将其放入all_blocks_name中
         all_files = os.listdir(self.blocks_path)
         self.all_blocks_name = []
-
+        #pdb.set_trace()
         # 遍历names列表，找到对应的block文件
         for base_name in self.names:
             # 查找所有以base_name开头且以_block-和.npy结尾的文件
             matched_files = [f for f in all_files if f.startswith(f"{base_name}_block-") and f.endswith('.npy')]
             self.all_blocks_name.extend(matched_files)
-        
+        #pdb.set_trace()
         # 排序以确保顺序一致性
         self.all_blocks_name.sort()
         
@@ -193,15 +193,18 @@ class Overlap_Blocks_Dataset(Dataset):
         return points_proj
     def __getitem__(self, index):
         block_name = self.all_blocks_name[index]
-
-        case_name = block_name.split('_')[0]
-        case_name = f"{case_name}_zoomed_s3"
         #pdb.set_trace()
+        case_name = block_name.rsplit('_block-', 1)[0]  # 从右边分割，只分割一次
+        #print(" case_name", case_name)
+        #case_name = f"{case_name}_zoomed_s3"
+        #print(" case_name" , case_name)
         projs, angles = self.sample_projections(case_name , n_view=2)
         #pdb.set_trace()
+        #print( " block_name:" , block_name)
         block_value = self.load_block(block_name) # uint8  h w d 1 
         #pdb.set_trace()
-        b_idx = int(block_name.split('-')[-1].split('.')[0])
+        b_idx = int( block_name.split('_block-')[-1].split('.')[0])
+        #print( " blocks_idx " , b_idx)
         block_coords =  self.blocks[b_idx]    # float 32  h w d 3 
         #pdb.set_trace()   
         block_coords =  (block_coords * 2.) - 1.
@@ -271,9 +274,9 @@ def load_overlap_diffusion_blocks(root_data , files_name_path  , geo_path):
     return dataset
 
 if __name__ == '__main__':
-    root = 'F:/Code_Space/Data_process/processed_128x128_s3.5'
-    geo_path = "./geo_cfg/config_2d_256_s2.5_3d_176_3.0.yaml"
-    train_case_name = './files_name/train_files.txt'
+    root = 'F:/Data_Space/Pelvic1K/processed_128x128_s2.0_block_48/'
+    geo_path = "./geo_cfg/config_2d_256_s2.0_3d_128_s2.5.yaml"
+    train_case_name = './files_name/train.txt'
     names = get_filesname_from_txt(train_case_name)
     pdb.set_trace()
     ds = Overlap_Blocks_Dataset(root , names,path_dict=PATH_DICT ,geo_path=geo_path , mode='train' , out_res_scale=1.0 )

@@ -222,24 +222,12 @@ def main():
     # pdb.set_trace()
     
     if cfg.dataset_name is not None:
-        # dataset = load_with_coord(
-        #     img_root= cfg.image_root,
-        #     coord_root= cfg.coord_root,
-        #     files_list_path= cfg.files_list_path
-        # )
-        #dataset = load_diffusion_random_blocks(cfg.image_root , cfg.files_list_path)
-        #dataset = load_diffusion_overlap_blocks(cfg.image_root , cfg.files_list_path)
-        # dataset = load_slice_dataset(cfg.image_root ,  cfg.files_list_path )
         dataset = load_overlap_diffusion_blocks(cfg.image_root ,cfg.train_list_path ,cfg.geo_cfg_path)
         test_dataset = load_overlap_diffusion_blocks(cfg.image_root , cfg.test_list_path , cfg.geo_cfg_path)
         #pdb.set_trace()
         logger.info(f"Train Dataset size: {len(dataset)}")
         logger.info(f"Test Dataset size: {len(test_dataset)}")
-    #else:
-        # dataset = load_with_coord(
-        #     "imagefolder", data_dir=cfg.train_data_dir, cache_dir=cfg.cache_dir, split="train")
-        # # See more about loading custom images at
-        # # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
+
 
     # Preprocessing the datasets and DataLoaders creation.
     # init_projector will use on from 3d points to 2d image 
@@ -478,7 +466,7 @@ def main():
                                 projs_points_tensor=test_batch['points_projs'],
                                 patch_image_tensor=test_batch['gt_idensity'],
                                 generator=generator,
-                                num_inference_steps=100,
+                                num_inference_steps=cfg.ddpm_num_inference_steps,
                                 save_path=save_dir,
                                 names=test_batch['name']
                             )

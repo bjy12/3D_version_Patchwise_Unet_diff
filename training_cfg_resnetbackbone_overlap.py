@@ -91,12 +91,12 @@ class BaseTrainingConfig:
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
     #image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2'
-    image_root: str = '/root/share/processed_128x128_s3.5'
+    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2.0_block_48/'
     #coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
     #files_list_path: str = './files_name/pelvic_coord_train_16.txt'
-    train_list_path: str = './files_name/train_files.txt'
-    test_list_path: str = './files_name/test_files.txt'
-    geo_cfg_path: str = './geo_cfg/config_2d_256_s2.5_3d_176_3.0.yaml'
+    train_list_path: str = './files_name/train_demo.txt'
+    test_list_path: str = './files_name/test.txt'
+    geo_cfg_path: str = './geo_cfg/config_2d_256_s2.0_3d_128_s2.5.yaml'
     
     # 
     use_multi_patch_size: bool = False  

@@ -4,7 +4,7 @@
     "num_epochs": 3000,
     "train_batch_size":2,
     "checkpointing_steps": 5000,
-    "valid_epochs": 50,
+    "valid_epochs": 1,
     "valid_batch_size": 1,
     "dataset_name": "points_wise_ct",
     "learning_rate": 1e-4
