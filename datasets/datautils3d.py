@@ -193,6 +193,7 @@ class Diffusion_Condition_Dataset(Dataset):
       
     def __getitem__(self, index):
         name = self.files_names[index]
+        #pdb.set_trace()
         gt_idensity = self.load_ct(name)  # scale to [0,1]
         #normalization [-1,1] follow diffusion input 
         gt_idensity = gt_idensity.astype(np.float32)
@@ -239,7 +240,7 @@ def load_diffusion_condition(root_data , files_name_path):
     files_name = get_filesname_from_txt(files_name_path)
     dataset = Diffusion_Condition_Dataset(root_data , files_name ,path_dict= PATH_DICT , mode='train') 
     #d_s_0 = dataset[0]
-
+    #pdb.set_trace()
     return dataset
 
 

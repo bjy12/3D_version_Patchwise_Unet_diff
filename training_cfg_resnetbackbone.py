@@ -7,7 +7,14 @@ class BaseTrainingConfig:
     # Dir
     logging_dir: str
     output_dir: str
+    # Patch related settings
+    img_resolution: int = 128  # 图像分辨率
+    pachify_size: int = 64     # patch大小
+    patch_start_i: int = 32    # patch起始位置i
+    patch_start_j: int = 32    # patch起始位置j
+    patch_start_k: int = 32    # patch起始位置k
 
+    
     # Logger and checkpoint
     logger: str = 'tensorboard'
     checkpointing_steps: int = 500
@@ -80,6 +87,7 @@ class BaseTrainingConfig:
     seed: int = None
     num_epochs: int = 200
     train_batch_size: int = 2
+    test_batch_size: int = 1 
     dataloader_num_workers: int = 1
     gradient_accumulation_steps: int = 1
     mixed_precision: str = None
@@ -89,10 +97,12 @@ class BaseTrainingConfig:
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    #image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2'
-    image_root: str = '/root/share/processed_128x128_s2'
+    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2.0_block_48'
+    #image_root: str = '/root/share/processed_128x128_s2'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
-    files_list_path: str = './files_name/pelvic_coord_train_16.txt'
+    files_list_path: str = './files_name/train_pelvic_2d_256_2.0_3d_128_2.5.txt'
+    #files_list_path: str = './files_name/train_demo.txt'
+    test_list_path: str = './files_name/test_pelvic_2d_256_2.0_3d_128_2.5.txt'
     geo_cfg_path: str = './geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'
     
     # 

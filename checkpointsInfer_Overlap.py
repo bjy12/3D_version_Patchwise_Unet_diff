@@ -20,9 +20,8 @@ from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from datasets.geometry import Geometry
 from pachify_and_projector import pachify3d_projected_points , init_projector
-#from training_cfg_pcc import BaseTrainingConfig
-from training_cfg_resnetbackbone import BaseTrainingConfig
-from datasets.datautils3d import load_diffusion_condition
+from training_cfg_resnetbackbone_overlap import BaseTrainingConfig
+from datasets.data_blocks import load_overlap_diffusion_blocks
 from metrics import calculate_metrics ,calculate_metrics_each_names
 import pdb
 
@@ -97,7 +96,7 @@ class CheckpointInferencePipeline(DiffusionPipeline):
         # 加载配置
         data_dict = OmegaConf.load(config_path)
         cfg = BaseTrainingConfig(**data_dict)
-        pdb.set_trace()
+        
         # 加载模型
         loaded_models = load_model_from_checkpoint(checkpoint_dir, use_ema)
         model = loaded_models["model"] if not use_ema else loaded_models["ema_model"]
@@ -115,20 +114,10 @@ class CheckpointInferencePipeline(DiffusionPipeline):
             scheduler=scheduler,
             use_acc=True
         )
-        
-        # 保存配置和其他必要的属性
         pipeline.cfg = cfg
-        pipeline.projector = init_projector(cfg.geo_cfg_path)
-        pdb.set_trace()
-        pipeline.patch_size = cfg.pachify_size
-        pipeline.start_pos = (cfg.img_resolution - cfg.pachify_size) // 2
-        pipeline.positions = {
-            'i': pipeline.start_pos,
-            'j': pipeline.start_pos,
-            'k': pipeline.start_pos,
-        }
-        
-        logger.info(f"Pipeline initialized with patch_size: {pipeline.patch_size}, start_pos: {pipeline.start_pos}")
+
+        # 保存配置和其他必要的属性
+        #logger.info(f"Pipeline initialized with patch_size: {pipeline.patch_size}, start_pos: {pipeline.start_pos}")
         
         return pipeline
 
@@ -218,20 +207,15 @@ class CheckpointInferencePipeline(DiffusionPipeline):
             # clean_images = batch['gt_idensity'].to(device=self.device, dtype=self.weight_dtype)
             # angles = batch['angles'].to(device=self.device)
 
-            projs = batch['projs'].to(dtype=self.weight_dtype)
-            clean_images = batch['gt_idensity'].to(dtype=self.weight_dtype)
+            projs = batch['projs'].to(self.weight_dtype)
+            clean_images = batch['gt_idensity'].to(self.weight_dtype)
             angles = batch['angles']
+            #pdb.set_trace()
+            # Sample noise that we'll add to the images
+            patch_image_tensor = clean_images 
+            patch_pos_tensor = batch['block_coords'].to(self.weight_dtype)
+            projs_points_tensor = batch['points_projs'].to(self.weight_dtype)
             batch_names = batch['name']
-            # Process data using pachify3d_projected_points
-            patch_image_tensor, patch_pos_tensor, projs_points_tensor = pachify3d_projected_points(
-                clean_images,
-                self.patch_size,
-                angles,
-                self.projector,
-                patch_pos=self.positions
-            )
-            
-            projs_points_tensor = projs_points_tensor.to(self.weight_dtype)
             
             # Get shapes for initialization
             batch_size = patch_image_tensor.shape[0]
@@ -305,7 +289,7 @@ class CheckpointInferencePipeline(DiffusionPipeline):
                 names=batch_names,
                 data_range=255
             )
-            spacing_values = np.array([2.0, 2.0, 2.0], dtype=np.float64)
+            spacing_values = np.array([2.5, 2.5, 2.5], dtype=np.float64)
             # 添加batch信息并存储metrics
             batch_psnr = 0
             batch_ssim = 0
@@ -353,16 +337,19 @@ class CheckpointInferencePipeline(DiffusionPipeline):
 
 if __name__ == "__main__":
     pipeline = CheckpointInferencePipeline.from_pretrained(
-                checkpoint_dir='F:/Code_Space/diff_implict_xray_to_ct/res_net_backBoneV0/check_points_/res_net_backBone_epo_2k/checkpoint-50000/unet',
+                checkpoint_dir='F:/Code_Space/diff_implict_xray_to_ct/res_net_backBoneV0/check_points_/overlap_resnetbackBoneV0/checkpoint-160000',
                 config_path='./cfg_pcc.json',
                 use_ema=False)
     #pipeline.to('cuda')
+    #pdb.set_trace()
+    geo_path = './geo_cfg/config_2d_256_s2.0_3d_128_s2.5.yaml'
     pdb.set_trace()
-    img_root = 'F:/Data_Space/Pelvic1K/processed_128x128_s2'
-    files_list_path = './files_name/pelvic_coord_test_16.txt'
-    dataset = load_diffusion_condition(
-        img_root, 
-        files_list_path
+    root_path = 'F:/Data_Space/Pelvic1K/processed_128x128_s2.0_block_48/'
+    test_files_list = './files_name/test.txt'
+    dataset = load_overlap_diffusion_blocks(
+        root_path, 
+        test_files_list,
+        geo_path = geo_path
     )
     dataloader = torch.utils.data.DataLoader(
         dataset, 
@@ -371,7 +358,7 @@ if __name__ == "__main__":
         num_workers=pipeline.cfg.dataloader_num_workers
     )
     pdb.set_trace()
-    results , metrics = pipeline(dataloader=dataloader, num_inference_steps=1000,output_dir='./inference_res_net_back_',save_intermediates=False,save_interval=100)
+    results , metrics = pipeline(dataloader=dataloader, num_inference_steps=1000,output_dir='./inference_outputs_55000_steps700',save_intermediates=False,save_interval=100)
     
     # 可以查看每个case的metrics
     for metric in metrics:

@@ -37,6 +37,7 @@ from pachify_and_projector import pachify3D , init_projector ,pachify3d_projecte
 #from training_cfg_pcc import BaseTrainingConfig
 from training_cfg_resnetbackbone import BaseTrainingConfig
 from utils import save_pred_to_local
+from train_eval import TestEvaluationPipeline
 import pdb
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -308,6 +309,15 @@ def main():
         run = os.path.split(__file__)[-1].split(".")[0]
         accelerator.init_trackers(run)
 
+    test_pipeline = TestEvaluationPipeline(
+        net=model,
+        scheduler=noise_scheduler,
+        accelerator=accelerator,
+        cfg=cfg,
+        projector=projector
+    )
+    best_metrics = {'psnr':0 , 'ssim':0}
+    
     total_batch_size = cfg.train_batch_size * \
         accelerator.num_processes * cfg.gradient_accumulation_steps
     num_update_steps_per_epoch = math.ceil(
@@ -367,12 +377,13 @@ def main():
     else:
         patch_size = cfg.pachify_size
     # patch pos 
-    start_pos = (128 - patch_size) // 2 
+    #start_pos = (128 - patch_size) // 2 
+    # 使用配置中的位置
     positions = {
-        'i': start_pos ,
-        'j': start_pos ,
-        'k': start_pos ,
-    }    
+        'i': cfg.patch_start_i,
+        'j': cfg.patch_start_j,
+        'k': cfg.patch_start_k
+    }  
     
     for epoch in range(first_epoch, cfg.num_epochs):
         model.train()
@@ -509,93 +520,34 @@ def main():
         if cfg.eval_vis :
             if accelerator.is_main_process:
                 if epoch % cfg.valid_epochs == 0 or epoch == cfg.num_epochs - 1:
-                    net = accelerator.unwrap_model(model)
-                    #pdb.set_trace()
-                    device = accelerator.device                    
-                    if cfg.use_ema:
-                        ema_model.store(net.parameters())
-                        ema_model.copy_to(net.parameters())
-                    #pdb.set_trace()
-
-                    pipeline = TrainingInferencePipeline(
-                        net=net,
-                        scheduler=noise_scheduler,
+                    logger.info(f"Running test set evaluation at epoch {epoch}")  
+                    eval_output = test_pipeline(
+                        test_dataloader=test_dataloader,
+                        epoch=epoch,
+                        global_step=global_step,
+                        best_metrics=best_metrics,
+                        ema_model=ema_model if cfg.use_ema else None,
+                        num_inference_steps=cfg.ddpm_num_inference_steps,
+                        generator=torch.Generator(device=accelerator.device).manual_seed(0)
                     )
-                    pipeline.set_device(device)
-                    generator = torch.Generator(
-                        device=device).manual_seed(0)
-                    save_dir = os.path.join(vis_dir, f'epoch_{epoch}_step_{global_step}')
-                    # run pipeline in inference (sample random noise and denoise)
-                    names = batch['name']
+                    # Update best metrics
+                    if eval_output.best_so_far:
+                        best_metrics = eval_output.metrics
+                        if eval_output.improved_metric:
+                            logger.info(
+                                f"New best {eval_output.improved_metric} achieved - "
+                                f"PSNR: {best_metrics['psnr']:.4f}, "
+                                f"SSIM: {best_metrics['ssim']:.4f}"
+                            )       
 
-                    results = pipeline(
-                            noisy_images=noisy_idensity,        # 从训练循环中获取
-                            patch_pos_tensor=patch_pos_tensor,  # 从训练循环中获取
-                            projs=projs,                        # 从训练循环中获取
-                            projs_points_tensor=projs_points_tensor,  # 从训练循环中获取
-                            patch_image_tensor=patch_image_tensor,    # 从训练循环中获取
-                            generator=generator,
-                            num_inference_steps=cfg.ddpm_num_inference_steps,
-                            save_path=save_dir,
-                            names=names
-                        )
-                    if cfg.use_ema:
-                        ema_model.restore(net.parameters())
-
-                    # denormalize the images and save to tensorboard
-
-                    if cfg.logger == "tensorboard":
-                        if is_accelerate_version(">=", "0.17.0.dev0"):
-                            tracker = accelerator.get_tracker(
-                                "tensorboard", unwrap=True)
-                            middle_slice = results.pred_samples.shape[2] // 2
-                            pred_slice = results.pred_samples[:, :, middle_slice, :, :]
-                            gt_slice = results.gt_samples[:, :, middle_slice, :, :]
-                            projs_vis = (projs.detach().cpu() + 1) / 2.0
-
-                            # 为每个样本添加带name的标签
-                            for idx, (pred, gt, proj_pair ,name) in enumerate(zip(pred_slice, gt_slice, projs_vis ,results.names)):
-                                #pdb.set_trace()
-                                pred_vis = np.expand_dims(pred, axis=0)
-                                gt_vis = np.expand_dims(gt, axis=0)
-                                tracker.add_images(f"train_inference/{name}/pred", pred_vis, global_step)
-                                tracker.add_images(f"train_inference/{name}/gt",gt_vis, global_step)
-                                for view_idx, proj in enumerate(proj_pair):
-                                    proj_vis = proj.unsqueeze(0)  # Add batch dimension [1, C, H, W]
-                                    tracker.add_images(f"train_inference/{name}/xray_proj_view_{view_idx}", proj_vis, global_step)
-                                # 记录每个样本的metrics
-                            tracker.add_scalar("metrics/psnr", results.metrics_log['psnr'], global_step)
-                            tracker.add_scalar("metrics/ssim", results.metrics_log['ssim'], global_step)                      
-                    else:
-                        tracker = accelerator.get_tracker("tensorboard")
-
-                if epoch % cfg.valid_epochs == 0 or epoch == cfg.num_epochs - 1:
-                    # save the model
-                    last_eval_dir = os.path.join(logging_dir , 'last_eval')
-
+                    # Save latest evaluation checkpoint
+                    last_eval_dir = os.path.join(cfg.output_dir, 'last_eval')
                     if os.path.exists(last_eval_dir):
                         shutil.rmtree(last_eval_dir)
-
                     os.makedirs(last_eval_dir)
+                    accelerator.save_state(last_eval_dir)         
 
-                    unet = accelerator.unwrap_model(model)
-                    #pdb.set_trace()
-                    if cfg.use_ema:
-                        ema_model.store(unet.parameters())
-                        ema_model.copy_to(unet.parameters())
-
-                    pipeline = TrainingInferencePipeline(
-                        net=net,
-                        scheduler=noise_scheduler,
-                    )
-                    pipeline.save_pretrained(last_eval_dir)
-
-                    if cfg.use_ema:
-                        ema_model.restore(unet.parameters())
-
-                    logger.info(f"Saved latest model to {last_eval_dir}") 
-
-
+                            
     accelerator.end_training()
 
 
