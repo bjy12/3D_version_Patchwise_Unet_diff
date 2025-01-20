@@ -132,10 +132,11 @@ class Implict_Fuc_Network(nn.Module):
             raise NotImplementedError("Unknown last activation")
         
     def forward(self, pos_feature, local_feature , global_feats):
-          
-        input_features = torch.cat([ pos_feature , local_feature ] , dim=-1)
-        res_feats = global_feats   #
-        res_feats = self.global_feat_processor(res_feats) 
+        pdb.set_trace()
+
+        input_features = torch.cat([ pos_feature , global_feats ] , dim=-1)
+        res_feats = local_feature   #
+        #res_feats = self.global_feat_processor(res_feats) 
         #pdb.set_trace()
         x = input_features
         # 前向传播
@@ -150,7 +151,7 @@ class Implict_Fuc_Network(nn.Module):
             
             x = linear(x)
             x = activation(x)
-        #pdb.set_trace()
+        pdb.set_trace()
         output = torch.cat([x , res_feats] , dim=2)
         #pdb.set_trace()
 

@@ -11,7 +11,7 @@ from utils import sitk_save
 import os
 import shutil
 from accelerate.logging import get_logger
-
+from diffusers.utils import is_accelerate_version
 
 import pdb
 logger = get_logger(__name__)
@@ -43,6 +43,18 @@ class TestEvaluationPipeline(DiffusionPipeline):
         self.weight_dtype = (torch.float16 if accelerator.mixed_precision == "fp16" 
                            else torch.bfloat16 if accelerator.mixed_precision == "bf16"
                            else torch.float32)
+        
+                # 获取 tensorboard tracker
+        if self.accelerator.is_main_process:
+            if cfg.logger == "tensorboard":
+                if is_accelerate_version(">=", "0.17.0.dev0"):
+                    self.tracker = accelerator.get_tracker("tensorboard", unwrap=True)
+                else:
+                    self.tracker = accelerator.get_tracker("tensorboard")
+            else:
+                self.tracker = None
+        else:
+            self.tracker = None
 
     def save_best_checkpoint(
         self,
@@ -179,6 +191,7 @@ class TestEvaluationPipeline(DiffusionPipeline):
         ema_model = None,
         num_inference_steps: int = 1000,
         generator: Optional[torch.Generator] = None,
+        num_samples: Optional[int] = None,
     ) -> TestEvaluationOutput:
         """
         Run evaluation on test dataset
@@ -199,9 +212,32 @@ class TestEvaluationPipeline(DiffusionPipeline):
         os.makedirs(save_dir, exist_ok=True)
         # Initialize progress bar
         progress_bar = tqdm(total=len(test_dataloader), desc="Evaluating test set")
-        
+
+        # 计算要处理的batch数量
+        batch_size = self.cfg.test_batch_size
+        total_batches = len(test_dataloader)
+       # 如果指定了样本数量，计算需要的batch数
+        if num_samples is not None:
+            required_batches = (num_samples + batch_size - 1) // batch_size
+            num_batches = min(required_batches, total_batches)
+            
+            # 使用generator设置随机种子，确保可重复性
+            if generator is not None:
+                np.random.seed(generator.initial_seed())
+            
+            # 随机选择要处理的batch索引
+            selected_batches = set(np.random.choice(total_batches, num_batches, replace=False))
+            logger.info(f"Will process {num_batches} randomly selected batches (~{num_batches * batch_size} samples)")
+        else:
+            selected_batches = None
+            num_batches = total_batches
+
+
         for batch_idx, batch in enumerate(test_dataloader):
             # Process batch data
+            if num_samples is not None and batch_idx >= num_batches:
+                break
+
             projs = batch['projs'].to(device=self.accelerator.device, dtype=self.weight_dtype)
             clean_images = batch['gt_idensity'].to(device=self.accelerator.device, dtype=self.weight_dtype)
             angles = batch['angles'].to(device=self.accelerator.device)  # Move angles to device

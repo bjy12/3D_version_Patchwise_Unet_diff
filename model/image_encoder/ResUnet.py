@@ -121,7 +121,6 @@ class ResNetGLEncoder(nn.Module):
         assert self.pretrained in [None, "autoenc_LIDC", "imagenet"]                    ## imagenet
         self.global_feature_layers_in_last = ['conv1', 'bn1', 'relu']
         self.model = set_model(pretrained_weight=self.pretrained, weight_dir=self.weight_dir, model_name=model_name)
-        self.transform = get_data_transform(in_channels=self.in_channels, input_img_size=self.input_img_size)
 
         del self.model.fc
         self.model.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -135,7 +134,6 @@ class ResNetGLEncoder(nn.Module):
                 break
             delattr(self.model, layer)
         #pdb.set_trace()
-        #if 'global_feature_layer_last' in cfg.keys():
         if self.global_feature_layer_last is not None:
             tmp = getattr(self.model, self.global_feature_layer)
             setattr(self.model, self.global_feature_layer, tmp[:self.global_feature_layer_last+1])
@@ -143,27 +141,28 @@ class ResNetGLEncoder(nn.Module):
             new_tmp = []
             for name, layer in tmp.named_modules():
                 if len(name) > 0 and name in  self.global_feature_layers_in_last:
-                    
                     new_tmp.append(copy.deepcopy(layer))
             setattr(getattr(self.model, self.global_feature_layer), str(self.global_feature_layer_last), nn.Sequential(*new_tmp))
+        #pdb.set_trace()
 
         ## get feature_layer's dim
         tmp = [n for n in getattr(self.model, self.feature_layer)[-1].named_modules() if len(n[0]) > 0]
+        #pdb.set_trace()
         for name, layer in tmp[::-1]:
             if name[:4] == 'conv':
                 output_dim = layer.out_channels
                 break
-
+        
         tmp = [n for n in getattr(self.model, self.global_feature_layer)[-1].named_modules() if len(n[0]) > 0]
         for name, layer in tmp[::-1]:
             if isinstance(layer, nn.Conv2d):
                 self.global_output_dim = layer.out_channels
                 break
-
-        if output_dim != self.latent_dim:
-            self.conv2 = nn.Conv2d(output_dim, self.latent_dim, kernel_size=(3, 3), padding=1, bias=False)  ## batch x latent_dim x 10 x 10
-            self.bn2 = nn.BatchNorm2d(self.latent_dim, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
-            self.relu = nn.ReLU()
+        #pdb.set_trace()
+        # if output_dim != self.latent_dim:
+        #     self.conv2 = nn.Conv2d(output_dim, self.latent_dim, kernel_size=(3, 3), padding=1, bias=False)  ## batch x latent_dim x 10 x 10
+        #     self.bn2 = nn.BatchNorm2d(self.latent_dim, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        #     self.relu = nn.ReLU()
 
         if self.pretrained and self.encoder_freeze_layer:
             for name, param in self.model.named_parameters():
@@ -172,7 +171,7 @@ class ResNetGLEncoder(nn.Module):
                 param.requires_grad = False
         factor = 2 if self.bilinear else 1
         # Decoder部分，使用新的Up模块
-        self.up3 = Up(1024, 512 // factor, self.bilinear)  # layer3 -> layer2
+        #self.up3 = Up(1024, 512 // factor, self.bilinear)  # layer3 -> layer2
         self.up2 = Up(512, 128 // factor, self.bilinear)   # layer2 -> layer1
         self.up1 = Up(128, 64, self.bilinear)    # layer1 -> initial
 
@@ -184,7 +183,7 @@ class ResNetGLEncoder(nn.Module):
                                   nn.BatchNorm2d(self.n_classed) ,
                                   nn.Tanh())
 
-        self.output_dim = output_dim
+        # self.output_dim = output_dim
         self.output_ch = self.latent_dim
 
     def forward(self, x):
@@ -205,9 +204,9 @@ class ResNetGLEncoder(nn.Module):
         skip_connections['initial'] = x 
         x = self.model.maxpool(x)  # 1  64  64 64  
         #pdb.set_trace()
-        # for input size (3, 320, 320)
-        # layer1: 256 64 64  ,  layer2: 512 32 32 , layer3: (global_feature  1 , 256 ,1,1 )
+        # layer1: 256 64 64 ,layer2: 512 32 32,layer3:(global_feature  1 , 256 ,1,1 )
         for layer in ["layer1", "layer2", "layer3", "layer4"]:
+        #for layer in ["layer1" , "layer2", "layer3"]:
             x = getattr(self.model, layer)(x)
             skip_connections[layer] = x
             if layer == self.feature_layer:
@@ -216,11 +215,11 @@ class ResNetGLEncoder(nn.Module):
                 #pdb.set_trace()
                 global_feature = self.model.avgpool(x)
                 break
-        #pdb.set_trace()
+        # pdb.set_trace()
         
         # Decoder path with skip connections
         # 1024 16 16   512 32 32 
-        local_feature = self.up3(local_feature, skip_connections['layer2'])
+        #local_feature = self.up3(local_feature, skip_connections['layer2'])
         #pdb.set_trace()
         local_feature = self.up2(local_feature, skip_connections['layer1'])
         #pdb.set_trace()
@@ -235,25 +234,27 @@ class ResNetGLEncoder(nn.Module):
         return local_feature.float() , global_feature.float()
 
 if __name__ == "__main__":
-    cfg = {
-        "model_name": "resnet101" ,
-        "in_channels": 3,
-        "latent_dim": 512,
-        "global_latent_dim": 256,
-        "encoder_freeze_layer": "layer1",
-        "feature_layer": "layer3",
-        "global_feature_layer": "layer4",
-        "global_feature_layer_last": 22,
-        "global_feature_layers_in_last": ["conv1", "bn1", "relu"] ,
-        "input_img_size": 256,
-        "pretrained": "imagenet",
-        "weight_dir": '' ,
-        "bilinear":False ,
-        "classed": 64     
-    }
-
-    encoder = ResNetGLEncoder(cfg)
-    encoder = encoder.to('cuda')
+  
+    # 初始化参数，使用关键字参数方式
+    encoder = ResNetGLEncoder(
+        in_channels=3,
+        latent_dim=512,
+        input_img_size=256,
+        encoder_freeze_layer='layer1',
+        feature_layer="layer2",
+        global_feature_layer="layer3",
+        global_feature_layer_last=22,
+        pretrained="imagenet",
+        weight_dir='',
+        bilinear=False,
+        n_classed=64,
+        model_name="resnet101"
+    )
+    
+    # 移动模型到GPU（如果可用）
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    encoder = encoder.to(device)
+    pdb.set_trace()
     x = torch.randn(1, 1, 256, 256).to('cuda')
     out = encoder(x)
     print(out['local'].shape, out['global'].shape)

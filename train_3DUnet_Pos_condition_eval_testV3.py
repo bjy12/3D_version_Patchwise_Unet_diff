@@ -22,7 +22,9 @@ from tqdm.auto import tqdm
 from omegaconf import OmegaConf
 #from model.Song3DUnet import Song_Unet3D
 #from model.Song3DUnetV3 import Song_Unet3D
-from model.Song3DUnetV4 import Song_Unet3D
+#from model.Song3DUnetV4 import Song_Unet3D
+from model.Song3DUnetV5 import Song_Unet3D
+
 import diffusers
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 
@@ -35,7 +37,8 @@ from diffusers.utils.import_utils import is_xformers_available
 #from ddpm_process import save_pred_from_noise
 from pachify_and_projector import pachify3D , init_projector ,pachify3d_projected_points
 #from training_cfg_pcc import BaseTrainingConfig
-from training_cfg_resnetbackbone import BaseTrainingConfig
+#from training_cfg_resnetbackbone import BaseTrainingConfig
+from training_cfg_resnetbackboneV3 import BaseTrainingConfig
 from utils import save_pred_to_local
 from train_eval import TestEvaluationPipeline
 import pdb

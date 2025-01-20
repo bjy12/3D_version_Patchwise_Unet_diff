@@ -310,8 +310,6 @@ def main():
                 num_update_steps_per_epoch * cfg.gradient_accumulation_steps)
 
     # Train!
- 
-    
     for epoch in range(first_epoch, cfg.num_epochs):
         model.train()
         progress_bar = tqdm(total=num_update_steps_per_epoch,

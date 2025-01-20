@@ -9,10 +9,10 @@ class BaseTrainingConfig:
     output_dir: str
     # Patch related settings
     img_resolution: int = 128  # 图像分辨率
-    pachify_size: int = 64     # patch大小
-    patch_start_i: int = 32    # patch起始位置i
-    patch_start_j: int = 32    # patch起始位置j
-    patch_start_k: int = 32    # patch起始位置k
+    pachify_size: int = 48
+    patch_start_i: int = 40    # patch起始位置i
+    patch_start_j: int = 40    # patch起始位置j
+    patch_start_k: int = 40    # patch起始位置k
 
 
     # Logger and checkpoint
@@ -59,7 +59,7 @@ class BaseTrainingConfig:
         "input_img_size" :256,
         "encoder_freeze_layer" :"layer1", 
         "feature_layer": "layer2",
-        "global_feature_layer" : "layer",
+        "global_feature_layer" : "layer3",
         "global_feature_layer_last" : 22,
         "pretrained" : "imagenet",
         "weight_dir" : '',
@@ -68,10 +68,10 @@ class BaseTrainingConfig:
         "model_name" : 'resnet101',
         #implict_func_model setting 
         'pos_dim': 63 ,
-        'local_f_dim':64 , 
+        'local_f_dim':512 , 
         'num_layer': 3 ,
-        'hidden_dim': 128 ,
-        'output_dim': 64 ,
+        'hidden_dim': 256 ,
+        'output_dim': 128 ,
         'skips': [] ,
         'last_activation': 'relu',
         'use_silu':False , 
@@ -98,17 +98,16 @@ class BaseTrainingConfig:
     # Dataset
     dataset_name: str = None
     #image_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/img'
-    image_root: str = 'F:/Data_Space/Pelvic1K/processed_128x128_s2.0_block_48'
+    image_root: str = 'F:/Code_Space/Data_process/processed_128x128_s2.0_block_48'
     #image_root: str = '/root/share/processed_128x128_s2'
     coord_root: str = 'F:/Data_Space/Pelvic1K/pcc_gan_demo/pcc_gan_demo_coords_test/train/coords'
-    #files_list_path: str = './files_name/train_pelvic_2d_256_2.0_3d_128_2.5.txt'
-    files_list_path: str = './files_name/train_demo.txt'
+    files_list_path: str = './files_name/train_pelvic_2d_256_2.0_3d_128_2.5.txt'
+    #files_list_path: str = './files_name/train_demo.txt'
     test_list_path: str = './files_name/test_pelvic_2d_256_2.0_3d_128_2.5.txt'
-    geo_cfg_path: str = './geo_cfg/config_2d_128_s2.5_3d_128_2.0_25.yaml'
+    geo_cfg_path: str = './geo_cfg/config.yaml'
     
     # 
     use_multi_patch_size: bool = False  
-    pachify_size: int = 48
 
     # LR Scheduler
     # Lr Scheduler 1 

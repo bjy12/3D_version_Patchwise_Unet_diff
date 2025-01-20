@@ -290,10 +290,10 @@ class CheckpointInferencePipeline(DiffusionPipeline):
                             self._save_volume(intermediate_image[i:i+1], save_path)
 
             # Process final prediction
-            final_pred = (scheduler_output.pred_original_sample + 1) / 2
+            final_pred = (scheduler_output.pred_original_sample + 1.) / 2.
             final_pred = final_pred.clamp(0, 1).cpu().numpy()
             gt_image   = patch_image_tensor.cpu().numpy()
-            gt_image   = ( gt_image + 1 ) / 2 
+            gt_image   = ( gt_image + 1. ) / 2. 
             
             
             final_pred = (final_pred * 255).astype(np.uint8)
